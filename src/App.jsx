@@ -1648,26 +1648,28 @@ function ResumenView({
         {conDeuda.length === 0 ? (
           <div className="empty small">No hay alumnos con saldo pendiente. Todo al día.</div>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Alumno</th>
-                <th>Categoría</th>
-                <th>Encargado</th>
-                <th className="num">Debe</th>
-              </tr>
-            </thead>
-            <tbody>
-              {conDeuda.map((a) => (
-                <tr key={a.id}>
-                  <td>{a.nombre}</td>
-                  <td>{a.categoria}</td>
-                  <td>{a.encargado || "—"}</td>
-                  <td className="num debt">{formatQ(a.saldoPendiente)}</td>
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Alumno</th>
+                  <th>Categoría</th>
+                  <th>Encargado</th>
+                  <th className="num">Debe</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {conDeuda.map((a) => (
+                  <tr key={a.id}>
+                    <td>{a.nombre}</td>
+                    <td>{a.categoria}</td>
+                    <td>{a.encargado || "—"}</td>
+                    <td className="num debt">{formatQ(a.saldoPendiente)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
@@ -1776,6 +1778,7 @@ function AlumnosView({
         </div>
       ) : (
         <div className="panel">
+          <div className="table-scroll">
           <table className="table">
             <thead>
               <tr>
@@ -1867,6 +1870,7 @@ function AlumnosView({
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
@@ -2280,26 +2284,28 @@ function CobroView({
         {cargos.length === 0 ? (
           <div className="empty small">Todavía no se ha generado ningún cobro mensual.</div>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Mes</th>
-                <th>Fecha de generación</th>
-                <th className="num">Alumnos</th>
-                <th className="num">Total generado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {cargos.map((c) => (
-                <tr key={c.id}>
-                  <td>{monthLabel(c.mes)}</td>
-                  <td>{c.fecha}</td>
-                  <td className="num">{c.cantidadAlumnos}</td>
-                  <td className="num">{formatQ(c.totalGenerado)}</td>
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Mes</th>
+                  <th>Fecha de generación</th>
+                  <th className="num">Alumnos</th>
+                  <th className="num">Total generado</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {cargos.map((c) => (
+                  <tr key={c.id}>
+                    <td>{monthLabel(c.mes)}</td>
+                    <td>{c.fecha}</td>
+                    <td className="num">{c.cantidadAlumnos}</td>
+                    <td className="num">{formatQ(c.totalGenerado)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>
@@ -2341,28 +2347,30 @@ function TablaMargen({ titulo, filas }) {
       {filas.length === 0 ? (
         <div className="empty small">No hay alumnos activos para agrupar.</div>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{titulo === "Por categoría" ? "Categoría" : "Horario"}</th>
-              <th className="num">Alumnos</th>
-              <th className="num">Becados</th>
-              <th className="num">Tarifa promedio</th>
-              <th className="num">Ingreso potencial</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filas.map((f) => (
-              <tr key={f.key}>
-                <td>{f.key}</td>
-                <td className="num">{f.cantidad}</td>
-                <td className="num">{f.becados || "—"}</td>
-                <td className="num">{formatQ(f.tarifaPromedio)}</td>
-                <td className="num">{formatQ(f.ingresoPotencial)}</td>
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>{titulo === "Por categoría" ? "Categoría" : "Horario"}</th>
+                <th className="num">Alumnos</th>
+                <th className="num">Becados</th>
+                <th className="num">Tarifa promedio</th>
+                <th className="num">Ingreso potencial</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filas.map((f) => (
+                <tr key={f.key}>
+                  <td>{f.key}</td>
+                  <td className="num">{f.cantidad}</td>
+                  <td className="num">{f.becados || "—"}</td>
+                  <td className="num">{formatQ(f.tarifaPromedio)}</td>
+                  <td className="num">{formatQ(f.ingresoPotencial)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -2509,6 +2517,7 @@ function AsistenciaView({ alumnosActivos, asistencias, onMarcar, marcandoIds }) 
         <div className="empty">No hay alumnos activos que coincidan con la búsqueda.</div>
       ) : (
         <div className="panel">
+          <div className="table-scroll">
           <table className="table">
             <thead>
               <tr>
@@ -2552,6 +2561,7 @@ function AsistenciaView({ alumnosActivos, asistencias, onMarcar, marcandoIds }) 
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
@@ -2989,6 +2999,25 @@ function Styles() {
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Jost:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 
+      /*
+        Tipografía: la guía de marca pide Futura (Book/Medium/LT Bold) en
+        todos los materiales. Futura es una fuente comercial que no está
+        disponible en Google Fonts ni en ningún CDN gratuito, así que no
+        se puede cargar el archivo real desde aquí. Este stack es la
+        solución honesta y pragmática:
+          - 'Futura' / 'Futura PT' primero: si la persona que abre la app
+            ya la tiene instalada (común en Mac, o con Adobe Fonts activo),
+            ve la tipografía real de la marca sin que tengamos que hacer nada.
+          - 'Jost' de respaldo: geométrica y de la misma familia visual que
+            Futura/Kabel — es la que ya se cargaba antes desde Google Fonts.
+          - 'Century Gothic' de respaldo: viene preinstalada en Windows/Office,
+            es la más parecida a Futura que casi cualquier persona sin Mac
+            va a tener realmente disponible.
+          - sans-serif genérica al final, por si ninguna de las anteriores existe.
+        Esta pila de "voz de marca" se usa en encabezados, el nombre/logo,
+        las pestañas de navegación y los botones. El cuerpo de datos (tablas
+        con números, formularios) se queda en Inter — ver nota más abajo.
+      */
       .app-root {
         --blue: #00B6F1;
         --blue-dark: #0090C2;
@@ -2997,135 +3026,194 @@ function Styles() {
         --bg: #F4F6F7;
         --card: #FFFFFF;
         --border: #E4E8EA;
-        font-family: 'Inter', system-ui, sans-serif;
+        --border-soft: #EEF1F2;
+        --radius-sm: 7px;
+        --radius-md: 10px;
+        --radius-lg: 14px;
+        --radius-pill: 999px;
+        --shadow-card: 0 1px 2px rgba(38,40,44,0.04);
+        --shadow-raised: 0 6px 16px rgba(38,40,44,0.08);
+        --shadow-modal: 0 20px 48px rgba(24,26,29,0.22);
+        --font-brand: 'Futura', 'Futura PT', 'Jost', 'Century Gothic', 'Inter', sans-serif;
+        --font-body: 'Inter', system-ui, sans-serif;
+        font-family: var(--font-body);
+        font-size: 14.5px;
         color: var(--ink);
         background: var(--bg);
         min-height: 100%;
         border-radius: 12px;
         overflow: hidden;
+        -webkit-font-smoothing: antialiased;
       }
-      .app-root h1, .app-root h2, .app-root h3, .app-root .brand-name, .app-root .tab, .app-root button {
-        font-family: 'Jost', 'Inter', sans-serif;
+      .app-root h1, .app-root h2, .app-root h3,
+      .app-root .brand-name, .app-root .tab, .app-root button {
+        font-family: var(--font-brand);
+      }
+      /* El cuerpo con datos densos (celdas de tabla, inputs, listas) se
+         queda en Inter a propósito: las geométricas como Futura/Century
+         Gothic son menos legibles en números pequeños, y esto es una
+         herramienta financiera donde confundir una cifra sí importa. */
+      .app-root table, .app-root input, .app-root select, .app-root textarea {
+        font-family: var(--font-body);
       }
 
       .topbar {
         display: flex; align-items: center; justify-content: space-between;
-        padding: 16px 20px; background: var(--card); border-bottom: 1px solid var(--border);
+        padding: 14px 20px; background: var(--card); border-bottom: 1px solid var(--border);
       }
       .brand { display: flex; align-items: center; gap: 10px; }
-      .brand-name { font-weight: 600; font-size: 17px; color: var(--charcoal); line-height: 1.1; }
-      .brand-sub { font-size: 12px; color: #8A8D90; font-family: 'Inter'; margin-top: 2px; }
+      .brand-name { font-weight: 600; font-size: 17px; color: var(--charcoal); line-height: 1.15; letter-spacing: 0.1px; }
+      .brand-sub { font-size: 12px; color: #8A8D90; font-family: var(--font-body); margin-top: 2px; }
       .sync-pill { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #8A8D90; }
       .sync-pill.ok { color: #158F63; }
       .topbar-right { display: flex; align-items: center; gap: 10px; }
       .reload-btn {
         display: flex; align-items: center; gap: 6px; font-size: 12px; color: #6C6F72;
-        background: #F0F2F3; border: none; padding: 6px 11px; border-radius: 999px; cursor: pointer; font-family: 'Inter';
+        background: #F0F2F3; border: none; padding: 7px 12px; border-radius: var(--radius-pill); cursor: pointer;
+        font-family: var(--font-body); transition: background 0.15s ease;
       }
       .reload-btn:hover { background: #E4E8EA; }
+      .reload-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
       .reload-btn:disabled { opacity: 0.6; cursor: default; }
       .spin { animation: spin 1s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
 
-      .tabs { display: flex; gap: 4px; padding: 10px 16px 0; background: var(--card); overflow-x: auto; }
-      .tab {
-        border: none; background: transparent; padding: 10px 16px; font-size: 14px; font-weight: 500;
-        color: #8A8D90; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap;
+      .tabs {
+        display: flex; gap: 2px; padding: 8px 16px 0; background: var(--card);
+        overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: thin;
       }
-      .tab.active { color: var(--blue-dark); border-bottom-color: var(--blue); }
+      .tab {
+        border: none; background: transparent; padding: 11px 16px; font-size: 13.5px; font-weight: 500;
+        color: #8A8D90; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap;
+        border-radius: var(--radius-sm) var(--radius-sm) 0 0; transition: color 0.15s ease, background 0.15s ease;
+        flex-shrink: 0;
+      }
+      .tab:hover { color: var(--charcoal); background: #F7F8F9; }
+      .tab:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+      .tab.active { color: var(--blue-dark); border-bottom-color: var(--blue); font-weight: 600; }
 
-      .content { padding: 20px; }
+      .content { padding: 22px; }
       .stack { display: flex; flex-direction: column; gap: 18px; }
       .two-col { flex-direction: row; align-items: flex-start; flex-wrap: wrap; }
       .two-col > .panel { flex: 1 1 320px; }
 
       .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
       .kpi-card {
-        background: var(--card); border: 1px solid var(--border); border-radius: 12px;
-        padding: 14px 16px; display: flex; align-items: center; gap: 12px;
+        background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-md);
+        padding: 16px; display: flex; align-items: center; gap: 12px; box-shadow: var(--shadow-card);
+        transition: box-shadow 0.15s ease, border-color 0.15s ease;
       }
-      .kpi-icon { width: 36px; height: 36px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-      .kpi-label { font-size: 12px; color: #8A8D90; margin-bottom: 2px; }
-      .kpi-value { font-size: 19px; font-weight: 700; color: var(--charcoal); font-family: 'Jost'; }
+      .kpi-icon { width: 38px; height: 38px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+      .kpi-label { font-size: 12px; color: #8A8D90; margin-bottom: 3px; }
+      .kpi-value { font-size: 19px; font-weight: 700; color: var(--charcoal); font-family: var(--font-brand); letter-spacing: 0.1px; }
 
-      .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+      .panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 18px 20px; box-shadow: var(--shadow-card); }
       .panel.highlight { border-color: #BEE9FA; background: #F7FCFE; }
-      .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-      .panel h2 { font-size: 15px; font-weight: 600; color: var(--charcoal); margin: 0 0 10px; }
-      .link-btn { background: none; border: none; color: var(--blue-dark); font-size: 13px; cursor: pointer; font-weight: 500; }
-      .muted { color: #8A8D90; font-size: 13px; line-height: 1.5; margin: 4px 0 0; }
+      .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+      .panel h2 { font-size: 15px; font-weight: 600; color: var(--charcoal); margin: 0 0 12px; }
+      .panel-head h2 { margin: 0; }
+      .link-btn { background: none; border: none; color: var(--blue-dark); font-size: 13px; cursor: pointer; font-weight: 500; padding: 4px 2px; border-radius: 4px; }
+      .link-btn:hover { text-decoration: underline; }
+      .link-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+      .muted { color: #8A8D90; font-size: 13px; line-height: 1.55; margin: 4px 0 0; }
 
       .cobro-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-      .cobro-preview { margin-top: 12px; font-size: 13px; color: var(--blue-dark); background: #E7F7FD; padding: 8px 12px; border-radius: 8px; display: inline-block; }
+      .cobro-preview { margin-top: 12px; font-size: 13px; color: var(--blue-dark); background: #E7F7FD; padding: 8px 12px; border-radius: var(--radius-sm); display: inline-block; }
       .cobro-mes-selector { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; font-size: 12px; color: #8A8D90; max-width: 320px; }
-      .cobro-mes-selector select { font-size: 14px; color: var(--ink); padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: #fff; width: 100%; }
+      .cobro-mes-selector select { font-size: 14px; color: var(--ink); padding: 9px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: #fff; width: 100%; }
+
+      /* Envoltorio para que las tablas puedan desplazarse horizontalmente
+         dentro de sí mismas en pantallas angostas, en vez de forzar scroll
+         en toda la página. El degradado del borde derecho es la pista
+         visual de que hay más columnas a la derecha; se oculta solo con
+         JS de scroll nativo (data-at-end), así que aquí se deja siempre
+         visible de forma sutil — es una pista, no un elemento crítico. */
+      .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: var(--radius-sm); position: relative; }
+      .table-scroll::-webkit-scrollbar { height: 7px; }
+      .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+      .table-scroll::-webkit-scrollbar-track { background: transparent; }
 
       .table { width: 100%; border-collapse: collapse; font-size: 13px; }
-      .table th { text-align: left; font-weight: 500; color: #8A8D90; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
-      .table td { padding: 10px; border-bottom: 1px solid #F0F2F3; vertical-align: middle; }
+      .table th { text-align: left; font-weight: 500; color: #8A8D90; padding: 9px 10px; border-bottom: 1px solid var(--border); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap; }
+      .table td { padding: 11px 10px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
       .table tr:last-child td { border-bottom: none; }
+      .table tbody tr { transition: background 0.12s ease; }
+      .table tbody tr:hover { background: #FAFBFC; }
       .table .num { text-align: right; }
       .table .debt { color: #C13F3B; font-weight: 600; }
       .table .th-check { width: 34px; padding-right: 0; }
       .table .th-check input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
       .row-inactive { opacity: 0.5; }
       .cell-title { font-weight: 500; color: var(--charcoal); }
-      .badge-becado { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; color: #B4790A; background: #FCF1DD; padding: 1.5px 7px; border-radius: 999px; vertical-align: middle; }
+      .badge-becado { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; color: #B4790A; background: #FCF1DD; padding: 1.5px 7px; border-radius: var(--radius-pill); vertical-align: middle; }
       .cell-sub { font-size: 12px; color: #8A8D90; margin-top: 1px; }
 
-      .badge { padding: 3px 10px; border-radius: 999px; font-weight: 600; font-size: 12.5px; }
-      .pill-toggle { border: 1px solid var(--border); background: #F7F7F8; color: #8A8D90; font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer; }
+      .badge { padding: 3px 10px; border-radius: var(--radius-pill); font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+      .pill-toggle {
+        border: 1px solid var(--border); background: #F7F7F8; color: #8A8D90; font-size: 12px; padding: 6px 12px;
+        border-radius: var(--radius-pill); cursor: pointer; min-height: 30px; transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+      }
+      .pill-toggle:hover { border-color: #CBD3D6; }
+      .pill-toggle:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
       .pill-toggle.on { background: #E7F7F1; color: #158F63; border-color: #CBEEDF; }
       .pill-ausente.on { background: #FBEAE9; color: #C13F3B; border-color: #F3CFCD; }
       .kpi-clickable { cursor: pointer; }
-      .kpi-clickable:hover { border-color: #BEE9FA; }
+      .kpi-clickable:hover { border-color: #BEE9FA; box-shadow: var(--shadow-raised); }
       .asistencia-fecha { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #6C6F72; font-weight: 500; }
-      .asistencia-fecha input { font-family: 'Inter'; font-size: 13.5px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); }
+      .asistencia-fecha input { font-family: var(--font-body); font-size: 13.5px; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
       .asistencia-botones { display: flex; gap: 6px; justify-content: flex-end; }
 
-      .actions { display: flex; gap: 4px; }
-      .icon-btn { border: none; background: transparent; color: #8A8D90; cursor: pointer; padding: 6px; border-radius: 7px; display: flex; }
+      .actions { display: flex; gap: 2px; }
+      .icon-btn {
+        border: none; background: transparent; color: #8A8D90; cursor: pointer; padding: 7px; border-radius: var(--radius-sm);
+        display: flex; align-items: center; justify-content: center; min-width: 30px; min-height: 30px; transition: background 0.15s ease, color 0.15s ease;
+      }
       .icon-btn:hover { background: #F0F2F3; color: var(--charcoal); }
+      .icon-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
       .icon-btn.danger:hover { background: #FBEAE9; color: #C13F3B; }
 
       .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: space-between; }
       .toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-      .search-box { display: flex; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--border); border-radius: 9px; padding: 8px 12px; flex: 1 1 260px; color: #8A8D90; }
-      .search-box input { border: none; outline: none; flex: 1; font-size: 13px; font-family: 'Inter'; background: transparent; }
+      .search-box { display: flex; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 12px; flex: 1 1 260px; color: #8A8D90; transition: border-color 0.15s ease; }
+      .search-box:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px #E7F7FD; }
+      .search-box input { border: none; outline: none; flex: 1; font-size: 13.5px; font-family: var(--font-body); background: transparent; min-width: 0; }
 
       .buscador-wrap { position: relative; }
       .buscador-input { border: 1px solid var(--border); }
       .buscador-input input { font-size: 14px; }
       .buscador-lista {
         position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: #fff;
-        border: 1px solid var(--border); border-radius: 9px; max-height: 240px; overflow-y: auto;
-        box-shadow: 0 8px 20px rgba(38,40,44,0.12); z-index: 20;
+        border: 1px solid var(--border); border-radius: var(--radius-sm); max-height: 240px; overflow-y: auto;
+        box-shadow: var(--shadow-raised); z-index: 20;
       }
       .buscador-item {
         display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%;
-        text-align: left; padding: 9px 12px; border: none; background: transparent; cursor: pointer;
-        border-bottom: 1px solid #F0F2F3; font-family: 'Inter';
+        text-align: left; padding: 10px 12px; border: none; background: transparent; cursor: pointer;
+        border-bottom: 1px solid var(--border-soft); font-family: var(--font-body); min-height: 44px;
       }
       .buscador-item:last-child { border-bottom: none; }
       .buscador-item:hover { background: #F7FCFE; }
       .buscador-vacio { padding: 14px 12px; font-size: 12.5px; color: #8A8D90; text-align: center; }
       .buscador-chip {
         display: flex; align-items: center; justify-content: space-between; border: 1px solid var(--border);
-        border-radius: 9px; padding: 9px 11px; background: #F7FCFE;
+        border-radius: var(--radius-sm); padding: 10px 12px; background: #F7FCFE; gap: 10px;
       }
 
-      .meses-calc { background: #F7FCFE; border: 1px dashed #BEE9FA; border-radius: 9px; padding: 10px 12px; }
+      .meses-calc { background: #F7FCFE; border: 1px dashed #BEE9FA; border-radius: var(--radius-sm); padding: 12px; }
       .meses-calc-label { font-size: 12.5px; color: #6C6F72; font-weight: 500; display: flex; flex-direction: column; gap: 6px; }
-      .meses-calc-row { display: flex; gap: 8px; align-items: center; }
-      .meses-calc-input { width: 60px; font-family: 'Inter'; font-size: 14px; padding: 9px 8px; border-radius: 8px; border: 1px solid var(--border); text-align: center; }
+      .meses-calc-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .meses-calc-input { width: 60px; font-family: var(--font-body); font-size: 14px; padding: 9px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border); text-align: center; }
       .meses-calc-hint { margin-top: 8px; margin-bottom: 0; }
 
       .btn-primary, .btn-secondary, .btn-danger {
-        border: none; border-radius: 9px; padding: 10px 16px; font-size: 13.5px; font-weight: 600;
+        border: none; border-radius: var(--radius-sm); padding: 10px 16px; font-size: 13.5px; font-weight: 600;
         cursor: pointer; display: inline-flex; align-items: center; gap: 6px; justify-content: center;
+        min-height: 40px; transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
       }
       .btn-primary { background: var(--blue); color: #fff; }
       .btn-primary:hover { background: var(--blue-dark); }
+      .btn-primary:active { transform: translateY(1px); }
+      .btn-primary:focus-visible, .btn-secondary:focus-visible, .btn-danger:focus-visible { outline: 2px solid var(--blue-dark); outline-offset: 2px; }
       .btn-primary:disabled { background: #CBD3D6; cursor: not-allowed; }
       .btn-primary.full { width: 100%; margin-top: 4px; }
       .btn-secondary { background: #F0F2F3; color: var(--charcoal); }
@@ -3133,66 +3221,109 @@ function Styles() {
       .btn-danger { background: #C13F3B; color: #fff; }
       .btn-danger:hover { background: #A3312D; }
 
-      .form-error { background: #FBEAE9; color: #C13F3B; font-size: 12.5px; padding: 9px 12px; border-radius: 8px; margin-bottom: 12px; }
+      .form-error { background: #FBEAE9; color: #C13F3B; font-size: 12.5px; padding: 10px 12px; border-radius: var(--radius-sm); margin-bottom: 12px; line-height: 1.5; }
       .checkbox-field { flex-direction: row !important; align-items: flex-start; gap: 9px !important; font-size: 13px !important; color: var(--ink) !important; font-weight: 400 !important; cursor: pointer; }
-      .checkbox-field input[type="checkbox"] { width: 16px; height: 16px; margin-top: 2px; accent-color: var(--blue); flex-shrink: 0; }
+      .checkbox-field input[type="checkbox"] { width: 17px; height: 17px; margin-top: 2px; accent-color: var(--blue); flex-shrink: 0; }
       .checkbox-hint { color: #8A8D90; }
-      .historial-tarifa { border-top: 1px solid #F0F2F3; padding-top: 10px; }
+      .historial-tarifa { border-top: 1px solid var(--border-soft); padding-top: 12px; }
       .historial-tarifa-toggle {
         display: flex; align-items: center; justify-content: space-between; width: 100%;
-        background: none; border: none; padding: 0; font-size: 12.5px; font-weight: 500;
-        color: #6C6F72; cursor: pointer; font-family: 'Inter';
+        background: none; border: none; padding: 4px 0; font-size: 12.5px; font-weight: 500;
+        color: #6C6F72; cursor: pointer; font-family: var(--font-body); min-height: 36px;
       }
       .historial-tarifa-caret { font-size: 9px; color: #8A8D90; }
       .historial-tarifa-body { margin-top: 8px; }
-      .historial-tarifa-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #6C6F72; }
-      .form { display: flex; flex-direction: column; gap: 12px; }
+      .historial-tarifa-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #6C6F72; }
+      .form { display: flex; flex-direction: column; gap: 14px; }
       .form-row { display: flex; gap: 12px; }
-      .form-row > label { flex: 1; }
-      .form label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: #6C6F72; font-family: 'Inter'; font-weight: 500; }
+      .form-row > label { flex: 1; min-width: 0; }
+      .form label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: #6C6F72; font-family: var(--font-body); font-weight: 500; }
       .form input, .form select {
-        font-family: 'Inter'; font-size: 14px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border);
-        color: var(--ink); background: #fff; outline: none;
+        font-family: var(--font-body); font-size: 15px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);
+        color: var(--ink); background: #fff; outline: none; transition: border-color 0.15s ease, box-shadow 0.15s ease; min-height: 42px; width: 100%;
       }
       .form input:focus, .form select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px #E7F7FD; }
 
       .pago-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-      .pago-list li { padding-bottom: 10px; border-bottom: 1px solid #F0F2F3; }
+      .pago-list li { padding-bottom: 10px; border-bottom: 1px solid var(--border-soft); }
       .pago-list li:last-child { border-bottom: none; padding-bottom: 0; }
-      .pago-row { display: flex; justify-content: space-between; }
+      .pago-row { display: flex; justify-content: space-between; gap: 10px; }
       .pago-monto { color: #158F63; font-weight: 600; }
-      .gasto-sub { display: flex; justify-content: space-between; align-items: center; }
+      .gasto-sub { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 
-      .empty { text-align: center; padding: 32px 16px; color: #8A8D90; font-size: 13.5px; background: var(--card); border: 1px dashed var(--border); border-radius: 12px; }
-      .empty.small { padding: 18px; }
+      .empty { text-align: center; padding: 36px 18px; color: #8A8D90; font-size: 13.5px; background: var(--card); border: 1px dashed var(--border); border-radius: var(--radius-md); }
+      .empty.small { padding: 20px; }
       .empty.error { color: #C13F3B; border-color: #F3CFCD; background: #FBEAE9; }
 
       .modal-overlay {
-        position: fixed; inset: 0; background: rgba(38,40,44,0.45); display: flex; align-items: center; justify-content: center;
+        position: fixed; inset: 0; background: rgba(30,32,35,0.5); display: flex; align-items: center; justify-content: center;
         padding: 16px; z-index: 50;
       }
-      .modal { background: #fff; border-radius: 14px; padding: 20px; width: 100%; max-width: 440px; max-height: 90vh; overflow-y: auto; }
+      .modal { background: #fff; border-radius: var(--radius-lg); padding: 22px; width: 100%; max-width: 440px; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow-modal); }
       .modal.small { max-width: 380px; }
-      .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-      .modal h3 { margin: 0; font-size: 16px; color: var(--charcoal); }
-      .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+      .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 16px; }
+      .modal h3 { margin: 0; font-size: 16.5px; color: var(--charcoal); }
+      .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 
       .toast {
         position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-        background: var(--charcoal); color: #fff; padding: 10px 18px; border-radius: 999px;
-        font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,0.18); z-index: 60;
+        background: var(--charcoal); color: #fff; padding: 11px 20px; border-radius: var(--radius-pill);
+        font-size: 13px; box-shadow: 0 10px 28px rgba(0,0,0,0.22); z-index: 60; max-width: calc(100vw - 32px); text-align: center;
       }
       .toast-error { background: #C13F3B; }
 
       .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
-      .login-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 28px 26px; width: 100%; max-width: 360px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+      .login-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 30px 26px; width: 100%; max-width: 360px; display: flex; flex-direction: column; align-items: center; text-align: center; box-shadow: var(--shadow-raised); }
       .login-card .form { width: 100%; text-align: left; margin-top: 4px; }
       .pantalla-centrada { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 30px; text-align: center; color: #6C6F72; font-size: 14px; max-width: 420px; margin: 0 auto; }
 
+      /* ---------- Responsivo: tablet-ish (≤640px) ---------- */
       @media (max-width: 640px) {
         .two-col { flex-direction: column; }
+        .two-col > .panel { flex-basis: auto; }
         .form-row { flex-direction: column; }
         .content { padding: 14px; }
+        .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+        .modal { padding: 18px; border-radius: var(--radius-md); }
+      }
+
+      /* ---------- Responsivo: teléfono angosto (≤480px), hasta ~360px ---------- */
+      @media (max-width: 480px) {
+        .app-root { border-radius: 0; font-size: 14px; }
+        .topbar { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
+        .brand-name { font-size: 15.5px; }
+        .topbar-right { gap: 6px; flex-wrap: wrap; }
+        .reload-btn { padding: 7px 10px; font-size: 11.5px; }
+        .tabs { padding: 6px 10px 0; gap: 0; }
+        .tab { padding: 10px 12px; font-size: 13px; min-height: 44px; }
+        .content { padding: 12px; }
+        .stack { gap: 14px; }
+        .kpi-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+        .kpi-card { padding: 12px; gap: 10px; }
+        .kpi-icon { width: 32px; height: 32px; }
+        .kpi-value { font-size: 16.5px; }
+        .kpi-label { font-size: 11px; }
+        .panel { padding: 14px; }
+        .toolbar { flex-direction: column; align-items: stretch; }
+        .toolbar-actions { justify-content: stretch; }
+        .toolbar-actions .btn-primary, .toolbar-actions .btn-secondary, .toolbar-actions .btn-danger { flex: 1 1 auto; }
+        .search-box { flex-basis: auto; }
+        .modal-overlay { padding: 0; align-items: flex-end; }
+        .modal {
+          max-width: 100%; width: 100%; border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+          max-height: 92vh; padding: 18px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+        }
+        .modal.small { max-width: 100%; }
+        .modal-actions { flex-direction: column-reverse; gap: 8px; }
+        .modal-actions .btn-primary, .modal-actions .btn-secondary, .modal-actions .btn-danger { width: 100%; }
+        .btn-primary, .btn-secondary, .btn-danger { min-height: 44px; }
+        .icon-btn { min-width: 36px; min-height: 36px; }
+        .pill-toggle { padding: 7px 12px; min-height: 34px; }
+        .asistencia-botones { justify-content: stretch; }
+        .asistencia-botones .pill-toggle { flex: 1 1 0; text-align: center; }
+        .login-card { padding: 24px 18px; }
+        .cobro-head { flex-direction: column; align-items: stretch; }
+        .cobro-head .btn-primary { width: 100%; }
       }
     `}</style>
   );
