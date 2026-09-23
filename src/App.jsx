@@ -311,7 +311,7 @@ function LoginScreen() {
       <Styles />
       <div className="login-wrap">
         <div className="login-card">
-          <LogoMark />
+          <LogoMark size={72} />
           <div className="brand-name" style={{ marginTop: 10 }}>
             Atletic Guatemala
           </div>
@@ -2981,16 +2981,15 @@ function ConfirmDialog({ title, body, confirmLabel, danger, onConfirm, onCancel,
   );
 }
 
-function LogoMark() {
+function LogoMark({ size = 34 }) {
   return (
-    <svg width="34" height="34" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="17" cy="17" r="16" stroke="#00B6F1" strokeWidth="2" fill="#F5FBFE" />
-      <path
-        d="M17 8 L21 12.5 L19.3 18 L14.7 18 L13 12.5 Z"
-        fill="#00B6F1"
-      />
-      <path d="M17 3.2V8M17 26v4.8M3.2 17H8M26 17h4.8" stroke="#00B6F1" strokeWidth="1.4" />
-    </svg>
+    <img
+      src="/logo.png"
+      alt="Atletic Guatemala"
+      className="logo-mark"
+      style={{ height: size, width: "auto" }}
+      draggable={false}
+    />
   );
 }
 
@@ -3039,12 +3038,13 @@ function Styles() {
         font-family: var(--font-body);
         font-size: 14.5px;
         color: var(--ink);
-        background: var(--bg);
+        background: linear-gradient(180deg, #EAF7FD 0%, var(--bg) 320px);
         min-height: 100%;
         border-radius: 12px;
         overflow: hidden;
         -webkit-font-smoothing: antialiased;
       }
+      .logo-mark { display: block; object-fit: contain; }
       .app-root h1, .app-root h2, .app-root h3,
       .app-root .brand-name, .app-root .tab, .app-root button {
         font-family: var(--font-brand);
@@ -3272,7 +3272,10 @@ function Styles() {
       }
       .toast-error { background: #C13F3B; }
 
-      .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+      .login-wrap {
+        min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;
+        background: linear-gradient(160deg, #EAF7FD 0%, var(--bg) 55%, #F4F6F7 100%);
+      }
       .login-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 30px 26px; width: 100%; max-width: 360px; display: flex; flex-direction: column; align-items: center; text-align: center; box-shadow: var(--shadow-raised); }
       .login-card .form { width: 100%; text-align: left; margin-top: 4px; }
       .pantalla-centrada { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 30px; text-align: center; color: #6C6F72; font-size: 14px; max-width: 420px; margin: 0 auto; }
