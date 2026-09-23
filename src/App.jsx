@@ -18,6 +18,7 @@ import {
   LogOut,
   ClipboardCheck,
   Lock,
+  FileDown,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -98,6 +99,16 @@ function asistenciaFromDb(r) {
   return { id: r.id, alumnoId: r.alumno_id, fecha: r.fecha, presente: !!r.presente, nota: r.nota, entrenadorId: r.entrenador_id };
 }
 
+function historialTarifaFromDb(r) {
+  return {
+    id: r.id,
+    alumnoId: r.alumno_id,
+    tarifaAnterior: Number(r.tarifa_anterior) || 0,
+    tarifaNueva: Number(r.tarifa_nueva) || 0,
+    fecha: r.fecha,
+  };
+}
+
 const CATEGORIAS = [
   "2010-2011",
   "2012-2013",
@@ -124,65 +135,6 @@ const HORARIOS = [
 const METODOS_PAGO = ["Efectivo", "Depósito BI", "Depósito OB", "Transferencia", "Otro"];
 
 const CATEGORIAS_GASTO = ["Cancha", "Pago a entrenador", "Equipo y material", "Publicidad", "Otro"];
-
-const IMPORT_ALUMNOS_2026 = [
-  { nombre: "Sebastian Mar", categoria: "2010-2011", encargado: "Angel Mar", telefono: "55051538", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Mario Alberto Gomez Téllez", categoria: "2010-2011", encargado: "Luz Tellez", telefono: "50106690", horario: "Lunes, miércoles y sábado", tarifaMensual: 475 },
-  { nombre: "Brandon Eduardo García", categoria: "2010-2011", encargado: "Damaris Molina", telefono: "38621773", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Gabriel Mercado", categoria: "2010-2011", encargado: "Reina Gonzalez", telefono: "42988287", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Andres Moreno", categoria: "2010-2011", encargado: "Oscar Moreno", telefono: "52023415", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Javier García", categoria: "2012-2013", encargado: "Javier García", telefono: "56308476", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Julian Orriols", categoria: "2012-2013", encargado: "Estela Rivera", telefono: "55507910", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Matias Orriols", categoria: "2012-2013", encargado: "Estela Rivera", telefono: "55507910", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Martin Ortíz", categoria: "2012-2013", encargado: "Ana Lucia Montoya", telefono: "55553333", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Mario Enrique Téllez", categoria: "2012-2013", encargado: "Luz Tellez", telefono: "50106690", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Noah", categoria: "2012-2013", encargado: "Zahra Figueredo", telefono: "55326218", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Adrian Dominguez", categoria: "2012-2013", encargado: "Vivian", telefono: "5208 8147", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Santiago Zelaya", categoria: "2012-2013", encargado: "Wendy Zelaya", telefono: "41135812", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Juan Felipe Leal", categoria: "2012-2013", encargado: "Luisa Gonzalez", telefono: "40024429", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Nicolás López", categoria: "2012-2013", encargado: "Verónica López", telefono: "48820645", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Luca Flores", categoria: "2012-2013", encargado: "Stefan Flores", telefono: "54107277", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Martín Rodas", categoria: "2012-2013", encargado: "Susana Reyes", telefono: "58995534", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Matias Betancurt", categoria: "2012-2013", encargado: "Oscar Bethancourt", telefono: "58771719", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Matias Estrada", categoria: "2012-2013", encargado: "Mariela de Estrada", telefono: "42121720", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Jose Ignacio Avendaño", categoria: "2012-2013", encargado: "Mishel de Avendaño", telefono: "56309372", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Thiago Roman", categoria: "2012-2013", encargado: "Victor Roman", telefono: "58370153", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Jose Alejandro Valdez", categoria: "2014-2015", encargado: "Beatriz Martinez", telefono: "52069262", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Gabriel Guerra", categoria: "2014-2015", encargado: "Raquel Asensio", telefono: "52029852", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Esteban Rojas", categoria: "2014-2015", encargado: "Jennifer Barrientos", telefono: "53176169", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Luca Feschet", categoria: "2014-2015", encargado: "Ana Barrios", telefono: "49743413", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Jose Haering", categoria: "2014-2015", encargado: "Daniel Haering", telefono: "30407006", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Nicolás Papescu", categoria: "2014-2015", encargado: "Mariana Lesca", telefono: "55552706", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Miguel López", categoria: "2014-2015", encargado: "Guadalupe Valle", telefono: "48284833", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Anthony Ramirez", categoria: "2014-2015", encargado: "Victor Ramirez", telefono: "37011323", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Diego Fernando Menchú", categoria: "2014-2015", encargado: "Francisco Menchú", telefono: "59911806", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Luis Mario Téllez", categoria: "2016-2017", encargado: "Luz Tellez", telefono: "50106690", horario: "Lunes, miércoles y sábado", tarifaMensual: 475 },
-  { nombre: "Daniel Guerra", categoria: "2016-2017", encargado: "Raquel Asensio", telefono: "52029852", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Mateo Velasquez", categoria: "2016-2017", encargado: "Daniela Hercules", telefono: "59239301", horario: "Martes y jueves", tarifaMensual: 475 },
-  { nombre: "Salvador Flores", categoria: "2016-2017", encargado: "Gabby Conzalez", telefono: "53000018", horario: "Martes y sábado", tarifaMensual: 475 },
-  { nombre: "Ignacio Carrillo", categoria: "2016-2017", encargado: "Carol Rodriguez", telefono: "40473435", horario: "Martes", tarifaMensual: 375 },
-  { nombre: "Santiago Lemus", categoria: "2016-2017", encargado: "Pamela López", telefono: "55720573", horario: "Martes y jueves", tarifaMensual: 0 },
-  { nombre: "Javier López", categoria: "2016-2017", encargado: "Pedro López", telefono: "47242407", horario: "Martes y jueves", tarifaMensual: 475 },
-  { nombre: "Jose Veras", categoria: "2016-2017", encargado: "Daniel Veras", telefono: "41739180", horario: "Martes y jueves", tarifaMensual: 475 },
-  { nombre: "Juan Ignacio Reyes", categoria: "2016-2017", encargado: "Dulce Veras", telefono: "30111997", horario: "Martes y jueves", tarifaMensual: 475 },
-  { nombre: "Andrés Carrillo", categoria: "2018-2019", encargado: "Gaby Lima", telefono: "52054807", horario: "Lunes y miércoles", tarifaMensual: 375 },
-  { nombre: "Juan Diego Montufar", categoria: "2018-2019", encargado: "Claudia Conde", telefono: "59181475", horario: "Lunes y miércoles", tarifaMensual: 425 },
-  { nombre: "Santiago Arenas", categoria: "2018-2019", encargado: "Andrea Galindo", telefono: "52045271", horario: "Lunes y miércoles", tarifaMensual: 425 },
-  { nombre: "Sebas Ruiz", categoria: "2018-2019", encargado: "Gaby Aguilar", telefono: "52052887", horario: "Lunes y miércoles", tarifaMensual: 425 },
-  { nombre: "Joaquin Urrea", categoria: "2018-2019", encargado: "Majo Urrea", telefono: "30008342", horario: "Lunes y miércoles", tarifaMensual: 375 },
-  { nombre: "Julian Donis", categoria: "2018-2019", encargado: "Paula Alvarado", telefono: "30008342", horario: "Lunes y miércoles", tarifaMensual: 425 },
-  { nombre: "Matias Gonzalez", categoria: "2018-2019", encargado: "Katia Diaz", telefono: "53187415", horario: "Lunes y miércoles", tarifaMensual: 425 },
-  { nombre: "Pablo Urbina", categoria: "2018-2019", encargado: "María Andre Pelaez", telefono: "54859032", horario: "Lunes y miércoles", tarifaMensual: 375 },
-  { nombre: "Javier Arriola", categoria: "2018-2019", encargado: "Marta Vargas", telefono: "58655756", horario: "Lunes y miércoles", tarifaMensual: 425 },
-  { nombre: "Nicolas Javier", categoria: "2018-2019", encargado: "Analu Javier", telefono: "30121855", horario: "Lunes y miércoles", tarifaMensual: 375 },
-  { nombre: "Ignacio Velasquez", categoria: "2018-2019", encargado: "Aleisa Quiroa", telefono: "54178613", horario: "Lunes, martes y miércoles", tarifaMensual: 475 },
-  { nombre: "Joaquin Lou", categoria: "2018-2019", encargado: "Rita de Lou", telefono: "42209923", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Luis Rolando García", categoria: "2018-2019", encargado: "Luisa Medina", telefono: "52019533", horario: "Martes y jueves", tarifaMensual: 475 },
-  { nombre: "Pablo Daniel", categoria: "2018-2019", encargado: "Ana Beatriz Caminade", telefono: "42191434", horario: "Martes, jueves y sábado", tarifaMensual: 575 },
-  { nombre: "Agustín Rivera", categoria: "2022-2023", encargado: "Pamela Maldonado", telefono: "53118443", horario: "Sábado", tarifaMensual: 375 },
-  { nombre: "Aitana de la Cerda Mendez", categoria: "2022-2023", encargado: "Luis Pedro de la Cerda", telefono: "59516339", horario: "Sábado", tarifaMensual: 375 },
-];
-
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -213,6 +165,17 @@ function monthLabel(monthKey) {
   const d = new Date(y, m - 1, 1);
   const label = d.toLocaleDateString("es-GT", { month: "long", year: "numeric" });
   return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+// Prepara un valor para una fila de CSV: si tiene comas, comillas o saltos
+// de línea, lo envuelve en comillas (duplicando las comillas internas),
+// que es la regla que entiende Excel al abrir un .csv.
+function csvEscape(v) {
+  const s = v === null || v === undefined ? "" : String(v);
+  if (/[",\n\r]/.test(s)) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
 }
 
 function saldoTone(saldo, tarifa) {
@@ -710,9 +673,9 @@ function PanelAdmin({ perfil, onLogout }) {
   });
   const [confirmDeleteGasto, setConfirmDeleteGasto] = useState(null);
   const [confirmDeletePago, setConfirmDeletePago] = useState(null);
+  const [editarPagoModal, setEditarPagoModal] = useState(null); // pago que se está editando, o null
   const [busqueda, setBusqueda] = useState("");
   const [confirmCargo, setConfirmCargo] = useState(false);
-  const [confirmImport, setConfirmImport] = useState(false);
   const [reloading, setReloading] = useState(false);
 
   async function cargarDatos({ silent } = {}) {
@@ -835,44 +798,6 @@ function PanelAdmin({ perfil, onLogout }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const pendientesImportar = useMemo(
-    () =>
-      IMPORT_ALUMNOS_2026.filter(
-        (x) => !alumnos.some((a) => a.nombre.trim().toLowerCase() === x.nombre.trim().toLowerCase())
-      ),
-    [alumnos]
-  );
-
-  async function importarListado2026() {
-    if (pendientesImportar.length === 0) {
-      setConfirmImport(false);
-      return;
-    }
-    if (!iniciarEnvio()) return;
-    try {
-      const nuevos = pendientesImportar.map((x) => ({
-        nombre: x.nombre,
-        encargado: x.encargado,
-        telefono: x.telefono,
-        categoria: x.categoria,
-        horario: x.horario,
-        tarifa_mensual: x.tarifaMensual,
-        becado: !!x.becado,
-        activo: true,
-      }));
-      const { error } = await supabase.from("alumnos").insert(nuevos);
-      setConfirmImport(false);
-      if (!error) {
-        await cargarDatos({ silent: true });
-        showToast(`${nuevos.length} alumno(s) importado(s) del listado 2026.`);
-      } else {
-        showToast("No se pudo importar (revisa tu conexión). Nada se agregó — inténtalo de nuevo.", true);
-      }
-    } finally {
-      terminarEnvio();
-    }
-  }
-
   function alumnoNombre(id) {
     const a = alumnos.find((x) => x.id === id);
     return a ? a.nombre : "(alumno eliminado)";
@@ -885,7 +810,18 @@ function PanelAdmin({ perfil, onLogout }) {
       const payload = alumnoToDb(data);
       let error;
       if (data.id) {
+        const alumnoAnterior = alumnos.find((a) => a.id === data.id);
         ({ error } = await supabase.from("alumnos").update(payload).eq("id", data.id));
+        // Si la tarifa cambió, deja constancia en el historial (solo de
+        // referencia — si esto fallara por algún motivo no se revierte el
+        // guardado del alumno, que ya se hizo bien arriba).
+        if (!error && alumnoAnterior && Number(alumnoAnterior.tarifaMensual || 0) !== Number(data.tarifaMensual || 0)) {
+          await supabase.from("historial_tarifas").insert({
+            alumno_id: data.id,
+            tarifa_anterior: Number(alumnoAnterior.tarifaMensual || 0),
+            tarifa_nueva: Number(data.tarifaMensual || 0),
+          });
+        }
       } else {
         ({ error } = await supabase.from("alumnos").insert(payload));
       }
@@ -1002,6 +938,32 @@ function PanelAdmin({ perfil, onLogout }) {
         showToast("Pago anulado. El saldo del alumno se actualizó.");
       } else {
         showToast("No se pudo anular el pago (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  // Edita un pago ya registrado (monto, método, fecha o nota). editar_pago
+  // ajusta el saldo del alumno por la DIFERENCIA entre el monto nuevo y el
+  // anterior, no lo sobrescribe — otra operación "todo o nada" en la base
+  // de datos, igual que registrar/anular pago.
+  async function guardarEdicionPago(pago, datos) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.rpc("editar_pago", {
+        p_pago_id: pago.id,
+        p_monto: datos.monto,
+        p_metodo: datos.metodo,
+        p_fecha: datos.fecha,
+        p_nota: datos.nota || null,
+      });
+      if (!error) {
+        await cargarDatos({ silent: true });
+        setEditarPagoModal(null);
+        showToast("Pago actualizado. El saldo del alumno se ajustó por la diferencia.");
+      } else {
+        showToast("No se pudo guardar el cambio (revisa tu conexión). Inténtalo de nuevo.", true);
       }
     } finally {
       terminarEnvio();
@@ -1134,6 +1096,55 @@ function PanelAdmin({ perfil, onLogout }) {
     }
   }
 
+  // Exporta a un .csv (se abre directo en Excel) los pagos y gastos del
+  // mes en curso más los totales, todo armado en el navegador — no hace
+  // falta ninguna llamada al servidor ni librería nueva.
+  function exportarResumenMes() {
+    const mesKey = currentMonthKey;
+    const pagosMes = pagos
+      .filter((p) => monthKeyOf(p.fecha) === mesKey)
+      .sort((a, b) => (a.fecha < b.fecha ? -1 : 1));
+    const gastosMes = gastos
+      .filter((g) => monthKeyOf(g.fecha) === mesKey)
+      .sort((a, b) => (a.fecha < b.fecha ? -1 : 1));
+    const totalCobrado = pagosMes.reduce((s, p) => s + Number(p.monto || 0), 0);
+    const totalGastado = gastosMes.reduce((s, g) => s + Number(g.monto || 0), 0);
+
+    const filas = [];
+    filas.push([`Resumen de ${monthLabel(mesKey)}`]);
+    filas.push([]);
+    filas.push(["Pagos"]);
+    filas.push(["Alumno", "Monto", "Método", "Fecha", "Nota"]);
+    pagosMes.forEach((p) => {
+      filas.push([alumnoNombre(p.alumnoId), Number(p.monto || 0).toFixed(2), p.metodo || "", p.fecha, p.nota || ""]);
+    });
+    filas.push([]);
+    filas.push(["Gastos"]);
+    filas.push(["Categoría", "Monto", "Fecha", "Nota"]);
+    gastosMes.forEach((g) => {
+      filas.push([g.categoria || "", Number(g.monto || 0).toFixed(2), g.fecha, g.nota || ""]);
+    });
+    filas.push([]);
+    filas.push(["Totales"]);
+    filas.push(["Total cobrado", totalCobrado.toFixed(2)]);
+    filas.push(["Total gastado", totalGastado.toFixed(2)]);
+    filas.push(["Margen", (totalCobrado - totalGastado).toFixed(2)]);
+
+    const csv = filas.map((fila) => fila.map(csvEscape).join(",")).join("\r\n");
+    // El "﻿" (BOM) al inicio es lo que hace que Excel reconozca los
+    // acentos y la "ñ" correctamente al abrir el archivo directo.
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `resumen-atletic-${mesKey}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast("Resumen exportado.");
+  }
+
   const alumnosFiltrados = alumnos
     .filter((a) => {
       const q = busqueda.trim().toLowerCase();
@@ -1150,6 +1161,18 @@ function PanelAdmin({ perfil, onLogout }) {
     .filter((a) => Number(a.saldoPendiente || 0) > 0)
     .sort((a, b) => Number(b.saldoPendiente || 0) - Number(a.saldoPendiente || 0))
     .slice(0, 8);
+
+  // Alumnos activos no becados a los que todavía no se les generó el
+  // cobro del mes en curso — mismo criterio que "pendientesGenerar" en
+  // Cobro mensual, pero fijo al mes de hoy (sin importar qué mes tenga
+  // seleccionado ahí), para avisar en el Resumen.
+  const pendientesMesActual = useMemo(
+    () =>
+      alumnosActivos
+        .filter((a) => !a.becado && a.ultimoMesCobrado !== currentMonthKey)
+        .sort((a, b) => Number(b.saldoPendiente || 0) - Number(a.saldoPendiente || 0)),
+    [alumnosActivos, currentMonthKey]
+  );
 
   // Lo que los entrenadores van marcando en "Asistencia" se refleja aquí
   // solo (por la suscripción en tiempo real de arriba), sin que el admin
@@ -1237,6 +1260,7 @@ function PanelAdmin({ perfil, onLogout }) {
           { key: "gasto", label: "Gastos" },
           { key: "cobro", label: "Cobro mensual" },
           { key: "asistencia", label: "Asistencia" },
+          { key: "margen", label: "Margen" },
         ].map((t) => (
           <button
             key={t.key}
@@ -1273,6 +1297,8 @@ function PanelAdmin({ perfil, onLogout }) {
                 onIrAsistencia={() => setTab("asistencia")}
                 chartIngresos={chartIngresos}
                 chartAsistencia={chartAsistencia}
+                pendientesMesActual={pendientesMesActual}
+                onExportarMes={exportarResumenMes}
               />
             )}
 
@@ -1286,8 +1312,6 @@ function PanelAdmin({ perfil, onLogout }) {
                 onEliminar={(a) => setConfirmDelete(a)}
                 onEliminarVarios={(ids) => setConfirmDeleteVarios(ids)}
                 onToggleActivo={toggleActivo}
-                pendientesImportarCount={pendientesImportar.length}
-                onImportar={() => setConfirmImport(true)}
                 onCorregirSaldo={(a) => setAjusteModal(a)}
               />
             )}
@@ -1301,6 +1325,7 @@ function PanelAdmin({ perfil, onLogout }) {
                 pagosRecientes={pagos.slice(0, 10)}
                 alumnoNombre={alumnoNombre}
                 onAnular={(p) => setConfirmDeletePago(p)}
+                onEditar={(p) => setEditarPagoModal(p)}
                 enviando={enviando}
               />
             )}
@@ -1338,6 +1363,10 @@ function PanelAdmin({ perfil, onLogout }) {
                 marcandoIds={marcandoIds}
               />
             )}
+
+            {tab === "margen" && (
+              <MargenView alumnosActivos={alumnosActivos} totalGastosMes={totalGastosMes} monthLabelStr={monthLabel(currentMonthKey)} />
+            )}
           </>
         )}
       </main>
@@ -1356,6 +1385,16 @@ function PanelAdmin({ perfil, onLogout }) {
           alumno={ajusteModal}
           onGuardar={aplicarAjusteSaldo}
           onCancel={() => setAjusteModal(null)}
+          enviando={enviando}
+        />
+      )}
+
+      {editarPagoModal && (
+        <EditarPagoModal
+          pago={editarPagoModal}
+          alumnoNombre={alumnoNombre}
+          onGuardar={guardarEdicionPago}
+          onCancel={() => setEditarPagoModal(null)}
           enviando={enviando}
         />
       )}
@@ -1428,21 +1467,6 @@ function PanelAdmin({ perfil, onLogout }) {
         />
       )}
 
-      {confirmImport && (
-        <ConfirmDialog
-          title="Importar listado 2026"
-          body={
-            pendientesImportar.length === 0
-              ? "Ya se importaron todos los alumnos de este listado (o ya existen con el mismo nombre)."
-              : `Se agregarán ${pendientesImportar.length} alumno(s) nuevo(s) con su categoría, horario y tarifa ya cargados, con saldo en Q0. Los que ya tienen el mismo nombre en tu lista no se duplican.`
-          }
-          confirmLabel={pendientesImportar.length === 0 ? "Entendido" : "Importar"}
-          onConfirm={importarListado2026}
-          onCancel={() => setConfirmImport(false)}
-          disabled={enviando}
-        />
-      )}
-
       {toast && (
         <div className={"toast" + (toast.isError ? " toast-error" : "")}>{toast.msg}</div>
       )}
@@ -1486,11 +1510,19 @@ function ResumenView({
   onIrAsistencia,
   chartIngresos,
   chartAsistencia,
+  pendientesMesActual,
+  onExportarMes,
 }) {
   const utilidadPositiva = utilidadMes >= 0;
   const hayAsistencia = chartAsistencia && chartAsistencia.length > 0;
   return (
     <div className="stack">
+      <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+        <button className="btn-secondary" onClick={onExportarMes}>
+          <FileDown size={15} /> Exportar resumen del mes
+        </button>
+      </div>
+
       <div className="kpi-grid">
         <div className="kpi-card">
           <div className="kpi-icon" style={{ background: "#E7F7FD", color: "#0090C2" }}>
@@ -1638,6 +1670,37 @@ function ResumenView({
           </table>
         )}
       </div>
+
+      <div className="panel">
+        <h2>Mensualidad pendiente de este mes</h2>
+        {pendientesMesActual.length === 0 ? (
+          <div className="empty small">
+            Todos los alumnos activos (no becados) ya tienen el cobro de este mes generado.
+          </div>
+        ) : (
+          <>
+            <p className="muted" style={{ marginBottom: 10 }}>
+              {pendientesMesActual.length} alumno(s) con la mensualidad de este mes sin generar
+              todavía. Puedes generarla desde la pestaña "Cobro mensual".
+            </p>
+            <ul className="pago-list">
+              {pendientesMesActual.slice(0, 10).map((a) => (
+                <li key={a.id}>
+                  <div className="pago-row">
+                    <span className="cell-title">{a.nombre}</span>
+                    <span className="num">{formatQ(a.saldoPendiente)}</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {pendientesMesActual.length > 10 && (
+              <p className="muted" style={{ marginTop: 8 }}>
+                +{pendientesMesActual.length - 10} más.
+              </p>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -1651,8 +1714,6 @@ function AlumnosView({
   onEliminar,
   onEliminarVarios,
   onToggleActivo,
-  pendientesImportarCount,
-  onImportar,
   onCorregirSaldo,
 }) {
   const [seleccionados, setSeleccionados] = useState(() => new Set());
@@ -1701,11 +1762,6 @@ function AlumnosView({
               onClick={() => onEliminarVarios(Array.from(seleccionados))}
             >
               <Trash2 size={16} /> Eliminar seleccionados ({seleccionados.size})
-            </button>
-          )}
-          {pendientesImportarCount > 0 && (
-            <button className="btn-secondary" onClick={onImportar}>
-              Importar listado 2026 ({pendientesImportarCount})
             </button>
           )}
           <button className="btn-primary" onClick={onNuevo}>
@@ -1909,7 +1965,7 @@ function BuscadorAlumno({ alumnos, seleccionado, onSeleccionar }) {
   );
 }
 
-function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecientes, alumnoNombre, onAnular, enviando }) {
+function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecientes, alumnoNombre, onAnular, onEditar, enviando }) {
   const alumnoSeleccionado = alumnosActivos.find((a) => a.id === pagoForm.alumnoId) || null;
   const [meses, setMeses] = useState(1);
 
@@ -2042,9 +2098,16 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
                     {p.fecha} · {p.metodo}
                     {p.nota ? ` · ${p.nota}` : ""}
                   </span>
-                  <button className="icon-btn danger" onClick={() => onAnular(p)} aria-label="Anular pago" disabled={enviando}>
-                    <Trash2 size={13} />
-                  </button>
+                  <span className="actions">
+                    {onEditar && (
+                      <button className="icon-btn" onClick={() => onEditar(p)} aria-label="Editar pago" disabled={enviando}>
+                        <Pencil size={13} />
+                      </button>
+                    )}
+                    <button className="icon-btn danger" onClick={() => onAnular(p)} aria-label="Anular pago" disabled={enviando}>
+                      <Trash2 size={13} />
+                    </button>
+                  </span>
                 </div>
               </li>
             ))}
@@ -2243,6 +2306,152 @@ function CobroView({
   );
 }
 
+// Junta a los alumnos activos por un campo (categoría u horario) y calcula
+// cantidad, cuántos son becados (no se les cobra), ingreso mensual
+// potencial (suma de tarifa de los NO becados) y tarifa promedio.
+function agruparAlumnosPor(alumnosActivos, campo) {
+  const mapa = new Map();
+  alumnosActivos.forEach((a) => {
+    const key = a[campo] || "Sin especificar";
+    const actual = mapa.get(key) || { cantidad: 0, becados: 0, ingresoPotencial: 0, tarifaCount: 0 };
+    actual.cantidad += 1;
+    if (a.becado) {
+      actual.becados += 1;
+    } else {
+      actual.ingresoPotencial += Number(a.tarifaMensual || 0);
+      actual.tarifaCount += 1;
+    }
+    mapa.set(key, actual);
+  });
+  return [...mapa.entries()]
+    .map(([key, v]) => ({
+      key,
+      cantidad: v.cantidad,
+      becados: v.becados,
+      ingresoPotencial: Number(v.ingresoPotencial.toFixed(2)),
+      tarifaPromedio: v.tarifaCount > 0 ? Number((v.ingresoPotencial / v.tarifaCount).toFixed(2)) : 0,
+    }))
+    .sort((a, b) => b.ingresoPotencial - a.ingresoPotencial);
+}
+
+function TablaMargen({ titulo, filas }) {
+  return (
+    <div className="panel">
+      <h2>{titulo}</h2>
+      {filas.length === 0 ? (
+        <div className="empty small">No hay alumnos activos para agrupar.</div>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>{titulo === "Por categoría" ? "Categoría" : "Horario"}</th>
+              <th className="num">Alumnos</th>
+              <th className="num">Becados</th>
+              <th className="num">Tarifa promedio</th>
+              <th className="num">Ingreso potencial</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map((f) => (
+              <tr key={f.key}>
+                <td>{f.key}</td>
+                <td className="num">{f.cantidad}</td>
+                <td className="num">{f.becados || "—"}</td>
+                <td className="num">{formatQ(f.tarifaPromedio)}</td>
+                <td className="num">{formatQ(f.ingresoPotencial)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// Reporte de margen por categoría y horario. El "ingreso potencial" es la
+// suma de tarifas de alumnos activos no becados (lo que se cobraría en un
+// mes si todos pagan su tarifa completa) — no es lo realmente cobrado, que
+// ya se ve en el Resumen. Los gastos NO están divididos por categoría ni
+// horario (esa información no existe todavía en "gastos"), así que se
+// muestran como un total aparte y se dice explícitamente que no se reparten,
+// en vez de inventar un reparto que no sería real.
+function MargenView({ alumnosActivos, totalGastosMes, monthLabelStr }) {
+  const porCategoria = useMemo(() => agruparAlumnosPor(alumnosActivos, "categoria"), [alumnosActivos]);
+  const porHorario = useMemo(() => agruparAlumnosPor(alumnosActivos, "horario"), [alumnosActivos]);
+  const ingresoPotencialTotal = useMemo(
+    () => alumnosActivos.filter((a) => !a.becado).reduce((s, a) => s + Number(a.tarifaMensual || 0), 0),
+    [alumnosActivos]
+  );
+
+  return (
+    <div className="stack">
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#E7F7F1", color: "#158F63" }}>
+            <ArrowUpRight size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Ingreso potencial mensual</div>
+            <div className="kpi-value">{formatQ(ingresoPotencialTotal)}</div>
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#FBEAE9", color: "#C13F3B" }}>
+            <ArrowDownRight size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Gastos en {monthLabelStr}</div>
+            <div className="kpi-value">{formatQ(totalGastosMes)}</div>
+          </div>
+        </div>
+      </div>
+
+      <p className="muted">
+        El ingreso potencial es la suma de tarifas de alumnos activos no becados agrupados abajo —
+        lo que se cobraría en un mes completo, no necesariamente lo que ya se cobró. Los gastos no
+        están divididos por categoría ni horario (esa información no se registra todavía al cargar
+        un gasto), por eso se muestran como un total aparte y no repartidos.
+      </p>
+
+      <div className="stack two-col">
+        <div className="panel">
+          <h2>Ingreso potencial por categoría</h2>
+          <div style={{ width: "100%", height: 220 }}>
+            <ResponsiveContainer>
+              <BarChart data={porCategoria.map((f) => ({ nombre: f.key, Ingreso: f.ingresoPotencial }))} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="#F0F2F3" />
+                <XAxis dataKey="nombre" tick={{ fontSize: 11, fill: "#8A8D90" }} axisLine={{ stroke: "#E4E8EA" }} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: "#8A8D90" }} axisLine={false} tickLine={false} width={54} tickFormatter={(v) => `Q${v >= 1000 ? `${Math.round(v / 1000)}k` : v}`} />
+                <Tooltip content={<ChartTooltip formatter={(v) => formatQ(v)} />} cursor={{ fill: "#F4F6F7" }} />
+                <Bar dataKey="Ingreso" fill="#0090C2" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div className="panel">
+          <h2>Ingreso potencial por horario</h2>
+          <div style={{ width: "100%", height: 220 }}>
+            <ResponsiveContainer>
+              <BarChart data={porHorario.map((f) => ({ nombre: f.key, Ingreso: f.ingresoPotencial }))} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="#F0F2F3" />
+                <XAxis dataKey="nombre" tick={{ fontSize: 10, fill: "#8A8D90" }} axisLine={{ stroke: "#E4E8EA" }} tickLine={false} interval={0} angle={-20} textAnchor="end" height={50} />
+                <YAxis tick={{ fontSize: 11, fill: "#8A8D90" }} axisLine={false} tickLine={false} width={54} tickFormatter={(v) => `Q${v >= 1000 ? `${Math.round(v / 1000)}k` : v}`} />
+                <Tooltip content={<ChartTooltip formatter={(v) => formatQ(v)} />} cursor={{ fill: "#F4F6F7" }} />
+                <Bar dataKey="Ingreso" fill="#00B6F1" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div className="stack two-col">
+        <TablaMargen titulo="Por categoría" filas={porCategoria} />
+        <TablaMargen titulo="Por horario" filas={porHorario} />
+      </div>
+    </div>
+  );
+}
+
 // Pasar lista. La usan tanto el admin como los entrenadores — a los
 // entrenadores se les pasa una lista de alumnos SIN tarifa ni saldo
 // (viene de la función alumnos_para_asistencia(), que nunca expone esas
@@ -2364,6 +2573,33 @@ function AlumnoModal({ initial, onSave, onCancel, enviando }) {
   });
   const [error, setError] = useState(null);
 
+  // Historial de cambios de tarifa: solo aplica si se está editando a un
+  // alumno que ya existe (uno nuevo todavía no tiene historial). Es
+  // secundario/de referencia, así que arranca cerrado y no bloquea nada
+  // si la consulta falla o tarda.
+  const [historial, setHistorial] = useState([]);
+  const [historialAbierto, setHistorialAbierto] = useState(false);
+  const [cargandoHistorial, setCargandoHistorial] = useState(false);
+
+  useEffect(() => {
+    if (!initial.id) return;
+    let cancelado = false;
+    setCargandoHistorial(true);
+    supabase
+      .from("historial_tarifas")
+      .select("*")
+      .eq("alumno_id", initial.id)
+      .order("fecha", { ascending: false })
+      .then(({ data }) => {
+        if (cancelado) return;
+        setHistorial((data || []).map(historialTarifaFromDb));
+        setCargandoHistorial(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [initial.id]);
+
   function handleSubmit(e) {
     if (e && e.preventDefault) e.preventDefault();
     const problemas = [];
@@ -2478,6 +2714,37 @@ function AlumnoModal({ initial, onSave, onCancel, enviando }) {
               )}
             </span>
           </label>
+
+          {form.id && (
+            <div className="historial-tarifa">
+              <button
+                type="button"
+                className="historial-tarifa-toggle"
+                onClick={() => setHistorialAbierto((v) => !v)}
+              >
+                Historial de tarifa{historial.length > 0 ? ` (${historial.length})` : ""}
+                <span className="historial-tarifa-caret">{historialAbierto ? "▲" : "▼"}</span>
+              </button>
+              {historialAbierto && (
+                <div className="historial-tarifa-body">
+                  {cargandoHistorial ? (
+                    <p className="muted">Cargando…</p>
+                  ) : historial.length === 0 ? (
+                    <p className="muted">Todavía no hay cambios de tarifa registrados para este alumno.</p>
+                  ) : (
+                    <ul className="historial-tarifa-lista">
+                      {historial.map((h) => (
+                        <li key={h.id}>
+                          {h.fecha} — {formatQ(h.tarifaAnterior)} → {formatQ(h.tarifaNueva)}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="modal-actions">
             <button type="button" className="btn-secondary" onClick={onCancel} disabled={enviando}>
               Cancelar
@@ -2576,6 +2843,107 @@ function AjusteSaldoModal({ alumno, onGuardar, onCancel, enviando }) {
             </button>
             <button type="button" className="btn-primary" onClick={handleSubmit} disabled={enviando}>
               {enviando ? "Guardando…" : "Guardar corrección"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Edita monto/método/fecha/nota de un pago ya registrado (nunca a qué
+// alumno pertenece — reasignarlo a otro alumno queda fuera de esto, para
+// mantenerlo simple). El saldo del alumno se ajusta solo por la diferencia
+// entre el monto viejo y el nuevo (ver editar_pago en supabase-schema.sql),
+// nunca sobrescribiéndolo, así que esto es seguro aunque el saldo ya haya
+// cambiado por otro pago mientras tanto.
+function EditarPagoModal({ pago, alumnoNombre, onGuardar, onCancel, enviando }) {
+  const [monto, setMonto] = useState(String(pago.monto ?? ""));
+  const [metodo, setMetodo] = useState(pago.metodo || METODOS_PAGO[0]);
+  const [fecha, setFecha] = useState(pago.fecha);
+  const [nota, setNota] = useState(pago.nota || "");
+  const [error, setError] = useState(null);
+
+  const montoNum = parseMonto(monto);
+  const diferencia = isNaN(montoNum) ? null : Number((montoNum - Number(pago.monto || 0)).toFixed(2));
+
+  function handleSubmit(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (isNaN(montoNum) || montoNum <= 0) {
+      setError("Ingresa un monto válido.");
+      return;
+    }
+    if (!fecha) {
+      setError("Elige una fecha.");
+      return;
+    }
+    setError(null);
+    onGuardar(pago, { monto: montoNum, metodo, fecha, nota: nota.trim() });
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Editar pago de {alumnoNombre(pago.alumnoId)}</h3>
+          <button className="icon-btn" onClick={onCancel} aria-label="Cerrar">
+            <X size={18} />
+          </button>
+        </div>
+        <p className="muted" style={{ marginTop: -4, marginBottom: 12 }}>
+          El saldo del alumno se ajustará solo por la diferencia entre el monto anterior y el
+          nuevo, no se sobrescribe.
+        </p>
+        {error && <div className="form-error">{error}</div>}
+        <div
+          className="form"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleSubmit(e);
+          }}
+        >
+          <div className="form-row">
+            <label>
+              Monto
+              <input
+                type="text"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={monto}
+                onChange={(e) => setMonto(e.target.value)}
+                autoFocus
+              />
+            </label>
+            <label>
+              Fecha
+              <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
+            </label>
+          </div>
+          {diferencia !== null && diferencia !== 0 && (
+            <p className="muted" style={{ marginTop: -4 }}>
+              Esto {diferencia > 0 ? "reduce" : "aumenta"} el saldo pendiente del alumno en{" "}
+              {formatQ(Math.abs(diferencia))}.
+            </p>
+          )}
+          <label>
+            Método de pago
+            <select value={metodo} onChange={(e) => setMetodo(e.target.value)}>
+              {METODOS_PAGO.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Nota (opcional)
+            <input type="text" value={nota} onChange={(e) => setNota(e.target.value)} />
+          </label>
+          <div className="modal-actions">
+            <button type="button" className="btn-secondary" onClick={onCancel} disabled={enviando}>
+              Cancelar
+            </button>
+            <button type="button" className="btn-primary" onClick={handleSubmit} disabled={enviando}>
+              {enviando ? "Guardando…" : "Guardar cambios"}
             </button>
           </div>
         </div>
@@ -2689,8 +3057,8 @@ function Styles() {
 
       .cobro-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
       .cobro-preview { margin-top: 12px; font-size: 13px; color: var(--blue-dark); background: #E7F7FD; padding: 8px 12px; border-radius: 8px; display: inline-block; }
-      .cobro-mes-selector { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; font-size: 12px; color: #8A8D90; max-width: 240px; }
-      .cobro-mes-selector select { font-size: 14px; color: var(--ink); padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: #fff; }
+      .cobro-mes-selector { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; font-size: 12px; color: #8A8D90; max-width: 320px; }
+      .cobro-mes-selector select { font-size: 14px; color: var(--ink); padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: #fff; width: 100%; }
 
       .table { width: 100%; border-collapse: collapse; font-size: 13px; }
       .table th { text-align: left; font-weight: 500; color: #8A8D90; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
@@ -2769,6 +3137,15 @@ function Styles() {
       .checkbox-field { flex-direction: row !important; align-items: flex-start; gap: 9px !important; font-size: 13px !important; color: var(--ink) !important; font-weight: 400 !important; cursor: pointer; }
       .checkbox-field input[type="checkbox"] { width: 16px; height: 16px; margin-top: 2px; accent-color: var(--blue); flex-shrink: 0; }
       .checkbox-hint { color: #8A8D90; }
+      .historial-tarifa { border-top: 1px solid #F0F2F3; padding-top: 10px; }
+      .historial-tarifa-toggle {
+        display: flex; align-items: center; justify-content: space-between; width: 100%;
+        background: none; border: none; padding: 0; font-size: 12.5px; font-weight: 500;
+        color: #6C6F72; cursor: pointer; font-family: 'Inter';
+      }
+      .historial-tarifa-caret { font-size: 9px; color: #8A8D90; }
+      .historial-tarifa-body { margin-top: 8px; }
+      .historial-tarifa-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #6C6F72; }
       .form { display: flex; flex-direction: column; gap: 12px; }
       .form-row { display: flex; gap: 12px; }
       .form-row > label { flex: 1; }
