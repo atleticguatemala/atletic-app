@@ -19,6 +19,18 @@ import {
   ClipboardCheck,
   Lock,
 } from "lucide-react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from "recharts";
 import { supabase } from "./lib/supabase.js";
 
 /* ---------------------------------------------------------
@@ -286,6 +298,10 @@ export default function App() {
     return <PanelEntrenador perfil={perfil} onLogout={cerrarSesion} />;
   }
 
+  if (perfil.rol === "asistente") {
+    return <PanelAsistente perfil={perfil} onLogout={cerrarSesion} />;
+  }
+
   return <PanelAdmin perfil={perfil} onLogout={cerrarSesion} />;
 }
 
@@ -447,6 +463,195 @@ function PanelEntrenador({ perfil, onLogout }) {
   );
 }
 
+// Vista del asistente: puede registrar pagos y marcar asistencia, pero no
+// ve gastos, cobro mensual, ajustes de saldo, ni puede editar/eliminar
+// alumnos ni el Resumen financiero completo — esas tablas y funciones
+// están bloqueadas para el rol "asistente" a nivel de base de datos (ver
+// supabase-schema.sql), así que aunque alguien manipulara la pantalla no
+// podría sacar esos datos.
+function PanelAsistente({ perfil, onLogout }) {
+  const [alumnos, setAlumnos] = useState([]);
+  const [pagos, setPagos] = useState([]);
+  const [asistencias, setAsistencias] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("pago");
+  const [toast, setToast] = useState(null);
+  const [marcandoIds, setMarcandoIds] = useState(() => new Set());
+
+  const enviandoRef = React.useRef(false);
+  const [enviando, setEnviando] = useState(false);
+  function iniciarEnvio() {
+    if (enviandoRef.current) return false;
+    enviandoRef.current = true;
+    setEnviando(true);
+    return true;
+  }
+  function terminarEnvio() {
+    enviandoRef.current = false;
+    setEnviando(false);
+  }
+
+  function showToast(msg, isError) {
+    setToast({ msg, isError: !!isError });
+    setTimeout(() => setToast(null), 2600);
+  }
+
+  const [pagoForm, setPagoForm] = useState({
+    alumnoId: "",
+    monto: "",
+    metodo: "Efectivo",
+    fecha: todayISO(),
+    nota: "",
+  });
+
+  async function cargar() {
+    const [a, p, s] = await Promise.all([
+      supabase.rpc("alumnos_para_pagos"),
+      supabase.from("pagos").select("*").order("created_at", { ascending: false }),
+      supabase.from("asistencias").select("*").order("fecha", { ascending: false }),
+    ]);
+    setAlumnos(a.data || []);
+    setPagos((p.data || []).map(pagoFromDb));
+    setAsistencias((s.data || []).map(asistenciaFromDb));
+  }
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      await cargar();
+      setLoading(false);
+    })();
+    const canal = supabase
+      .channel("atletic-cambios-asistente")
+      .on("postgres_changes", { event: "*", schema: "public", table: "pagos" }, () => cargar())
+      .on("postgres_changes", { event: "*", schema: "public", table: "asistencias" }, () => cargar())
+      .subscribe();
+    return () => {
+      supabase.removeChannel(canal);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function alumnoNombre(id) {
+    const a = alumnos.find((x) => x.id === id);
+    return a ? a.nombre : "(alumno eliminado)";
+  }
+
+  async function registrarPago(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!iniciarEnvio()) return;
+    try {
+      const monto = parseMonto(pagoForm.monto);
+      if (!pagoForm.alumnoId || isNaN(monto) || monto <= 0) {
+        showToast("Selecciona un alumno e ingresa un monto válido.", true);
+        return;
+      }
+      const { error } = await supabase.rpc("registrar_pago", {
+        p_alumno_id: pagoForm.alumnoId,
+        p_monto: monto,
+        p_metodo: pagoForm.metodo,
+        p_fecha: pagoForm.fecha,
+        p_nota: pagoForm.nota || null,
+      });
+      if (!error) {
+        await cargar();
+        setPagoForm({ alumnoId: "", monto: "", metodo: "Efectivo", fecha: todayISO(), nota: "" });
+        showToast("Pago registrado.");
+      } else {
+        showToast(
+          "No se pudo guardar el pago (revisa tu conexión). No se perdió lo que escribiste — dale clic de nuevo.",
+          true
+        );
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function marcarAsistencia(alumnoId, fecha, presente) {
+    if (marcandoIds.has(alumnoId)) return;
+    setMarcandoIds((prev) => new Set(prev).add(alumnoId));
+    try {
+      await supabase.rpc("marcar_asistencia", { p_alumno_id: alumnoId, p_fecha: fecha, p_presente: presente });
+      await cargar();
+    } finally {
+      setMarcandoIds((prev) => {
+        const next = new Set(prev);
+        next.delete(alumnoId);
+        return next;
+      });
+    }
+  }
+
+  return (
+    <div className="app-root">
+      <Styles />
+      <header className="topbar">
+        <div className="brand">
+          <LogoMark />
+          <div>
+            <div className="brand-name">Atletic Guatemala</div>
+            <div className="brand-sub">Asistente</div>
+          </div>
+        </div>
+        <button className="reload-btn" onClick={onLogout} title="Cerrar sesión">
+          <LogOut size={14} />
+          {perfil?.nombre ? perfil.nombre : "Salir"}
+        </button>
+      </header>
+
+      <nav className="tabs">
+        {[
+          { key: "pago", label: "Registrar pago" },
+          { key: "asistencia", label: "Asistencia" },
+        ].map((t) => (
+          <button
+            key={t.key}
+            className={"tab" + (tab === t.key ? " active" : "")}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
+
+      <main className="content">
+        {loading ? (
+          <div className="empty">Cargando información…</div>
+        ) : (
+          <>
+            {tab === "pago" && (
+              <PagoView
+                alumnosActivos={alumnos}
+                pagoForm={pagoForm}
+                setPagoForm={setPagoForm}
+                onSubmit={registrarPago}
+                pagosRecientes={pagos.slice(0, 10)}
+                alumnoNombre={alumnoNombre}
+                onAnular={() => showToast("No tienes permiso para anular pagos. Pídele a un administrador que lo haga.", true)}
+                enviando={enviando}
+              />
+            )}
+
+            {tab === "asistencia" && (
+              <AsistenciaView
+                alumnosActivos={alumnos}
+                asistencias={asistencias}
+                onMarcar={marcarAsistencia}
+                marcandoIds={marcandoIds}
+              />
+            )}
+          </>
+        )}
+      </main>
+
+      {toast && (
+        <div className={"toast" + (toast.isError ? " toast-error" : "")}>{toast.msg}</div>
+      )}
+    </div>
+  );
+}
+
 // Vista completa: alumnos, pagos, gastos, cobros, ajustes y asistencia.
 // Solo un usuario con rol "admin" llega aquí (la tabla `alumnos` y las
 // demás están bloqueadas para cualquier otro rol a nivel de base de
@@ -485,6 +690,11 @@ function PanelAdmin({ perfil, onLogout }) {
   const [alumnoModal, setAlumnoModal] = useState(null); // null | {} (nuevo) | alumno (editar)
   const [ajusteModal, setAjusteModal] = useState(null); // alumno al que se le va a corregir el saldo
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [confirmDeleteVarios, setConfirmDeleteVarios] = useState(null); // array de ids, o null
+  // Mes que se va a cobrar en la pestaña "Cobro mensual". Empieza en el mes
+  // de hoy, pero se puede adelantar a cualquier mes que quede del año — así
+  // no hay que esperar a que llegue la fecha para generarlo.
+  const [mesCobroSeleccionado, setMesCobroSeleccionado] = useState(monthKeyOf(todayISO()));
   const [pagoForm, setPagoForm] = useState({
     alumnoId: "",
     monto: "",
@@ -609,8 +819,21 @@ function PanelAdmin({ perfil, onLogout }) {
   // Los becados nunca entran al cobro mensual: no se les suma tarifa.
   const becadosActivosCount = alumnosActivos.filter((a) => a.becado).length;
   const pendientesGenerar = alumnosActivos.filter(
-    (a) => !a.becado && a.ultimoMesCobrado !== currentMonthKey
+    (a) => !a.becado && a.ultimoMesCobrado !== mesCobroSeleccionado
   );
+
+  // Meses que se pueden elegir para generar el cobro: de hoy en adelante,
+  // hasta diciembre del año actual (así se puede adelantar el cobro de
+  // cualquier mes que falte, sin tener que esperar a que llegue la fecha).
+  const mesesCobroDisponibles = useMemo(() => {
+    const [anioActual, mesActual] = monthKeyOf(todayISO()).split("-").map(Number);
+    const meses = [];
+    for (let m = mesActual; m <= 12; m++) {
+      meses.push(`${anioActual}-${String(m).padStart(2, "0")}`);
+    }
+    return meses;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const pendientesImportar = useMemo(
     () =>
@@ -688,6 +911,28 @@ function PanelAdmin({ perfil, onLogout }) {
         showToast("Alumno eliminado.");
       } else {
         showToast("No se pudo eliminar (revisa tu conexión). Sigue en tu lista — inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  // Borra varios alumnos de una vez (el checklist de la pestaña Alumnos).
+  // Usa "in" para borrarlos todos en una sola llamada a la base de datos.
+  async function eliminarAlumnos(ids) {
+    if (!ids || ids.length === 0) return;
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("alumnos").delete().in("id", ids);
+      setConfirmDeleteVarios(null);
+      if (!error) {
+        setAlumnos((prev) => prev.filter((a) => !ids.includes(a.id)));
+        showToast(`${ids.length} alumno(s) eliminado(s).`);
+      } else {
+        showToast(
+          "No se pudo eliminar (revisa tu conexión). Nadie se borró — inténtalo de nuevo.",
+          true
+        );
       }
     } finally {
       terminarEnvio();
@@ -871,13 +1116,13 @@ function PanelAdmin({ perfil, onLogout }) {
       // (ver supabase-schema.sql) — esto es justo lo que falló antes con
       // el incidente de "Por cobrar Q0" por varias pestañas abiertas.
       const { error } = await supabase.rpc("generar_cobro_mensual", {
-        p_mes: currentMonthKey,
+        p_mes: mesCobroSeleccionado,
         p_alumno_ids: afectados.map((a) => a.id),
       });
       setConfirmCargo(false);
       if (!error) {
         await cargarDatos({ silent: true });
-        showToast(`Cobro de ${monthLabel(currentMonthKey)} generado para ${afectados.length} alumno(s).`);
+        showToast(`Cobro de ${monthLabel(mesCobroSeleccionado)} generado para ${afectados.length} alumno(s).`);
       } else {
         showToast(
           "No se pudo generar el cobro (revisa tu conexión). No se aplicó ningún cambio — inténtalo de nuevo.",
@@ -911,6 +1156,45 @@ function PanelAdmin({ perfil, onLogout }) {
   // tenga que hacer nada.
   const asistenciasHoy = asistencias.filter((x) => x.fecha === todayISO());
   const presentesHoy = asistenciasHoy.filter((x) => x.presente).length;
+
+  // Datos para las gráficas del Resumen: cobrado vs. gastos de los
+  // últimos 6 meses (incluyendo el actual), y % de asistencia de los
+  // últimos 14 días con registros.
+  const chartIngresos = useMemo(() => {
+    const meses = [];
+    const base = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(base.getFullYear(), base.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      meses.push({ key, label: monthLabel(key).replace(/ de \d+$/, "").slice(0, 3) });
+    }
+    return meses.map(({ key, label }) => ({
+      mes: label,
+      Cobrado: Number(
+        pagos.filter((p) => monthKeyOf(p.fecha) === key).reduce((s, p) => s + Number(p.monto || 0), 0).toFixed(2)
+      ),
+      Gastos: Number(
+        gastos.filter((g) => monthKeyOf(g.fecha) === key).reduce((s, g) => s + Number(g.monto || 0), 0).toFixed(2)
+      ),
+    }));
+  }, [pagos, gastos]);
+
+  const chartAsistencia = useMemo(() => {
+    const porFecha = new Map();
+    asistencias.forEach((a) => {
+      const actual = porFecha.get(a.fecha) || { total: 0, presentes: 0 };
+      actual.total += 1;
+      if (a.presente) actual.presentes += 1;
+      porFecha.set(a.fecha, actual);
+    });
+    return [...porFecha.entries()]
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .slice(-14)
+      .map(([fecha, v]) => ({
+        fecha: fecha.slice(5), // MM-DD
+        Asistencia: Math.round((v.presentes / v.total) * 100),
+      }));
+  }, [asistencias]);
 
   return (
     <div className="app-root">
@@ -987,6 +1271,8 @@ function PanelAdmin({ perfil, onLogout }) {
                 presentesHoy={presentesHoy}
                 asistenciasHoyCount={asistenciasHoy.length}
                 onIrAsistencia={() => setTab("asistencia")}
+                chartIngresos={chartIngresos}
+                chartAsistencia={chartAsistencia}
               />
             )}
 
@@ -998,6 +1284,7 @@ function PanelAdmin({ perfil, onLogout }) {
                 onNuevo={() => setAlumnoModal({})}
                 onEditar={(a) => setAlumnoModal(a)}
                 onEliminar={(a) => setConfirmDelete(a)}
+                onEliminarVarios={(ids) => setConfirmDeleteVarios(ids)}
                 onToggleActivo={toggleActivo}
                 pendientesImportarCount={pendientesImportar.length}
                 onImportar={() => setConfirmImport(true)}
@@ -1033,7 +1320,10 @@ function PanelAdmin({ perfil, onLogout }) {
 
             {tab === "cobro" && (
               <CobroView
-                monthLabelStr={monthLabel(currentMonthKey)}
+                monthLabelStr={monthLabel(mesCobroSeleccionado)}
+                mesesDisponibles={mesesCobroDisponibles}
+                mesSeleccionado={mesCobroSeleccionado}
+                onCambiarMes={setMesCobroSeleccionado}
                 pendientesGenerar={pendientesGenerar}
                 cargos={cargos}
                 onGenerar={() => setConfirmCargo(true)}
@@ -1082,6 +1372,18 @@ function PanelAdmin({ perfil, onLogout }) {
         />
       )}
 
+      {confirmDeleteVarios && (
+        <ConfirmDialog
+          title={`¿Eliminar ${confirmDeleteVarios.length} alumno(s)?`}
+          body="Se borrará su información y no podrá deshacerse. El historial de pagos ya registrados se conserva."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarAlumnos(confirmDeleteVarios)}
+          onCancel={() => setConfirmDeleteVarios(null)}
+          disabled={enviando}
+        />
+      )}
+
       {confirmDeleteGasto && (
         <ConfirmDialog
           title="¿Eliminar este gasto?"
@@ -1108,10 +1410,10 @@ function PanelAdmin({ perfil, onLogout }) {
 
       {confirmCargo && (
         <ConfirmDialog
-          title={`Generar cobro de ${monthLabel(currentMonthKey)}`}
+          title={`Generar cobro de ${monthLabel(mesCobroSeleccionado)}`}
           body={
             (pendientesGenerar.length === 0
-              ? "Todos los alumnos activos que no están becados ya tienen el cobro de este mes generado."
+              ? "Todos los alumnos activos que no están becados ya tienen el cobro de ese mes generado."
               : `Se sumará la tarifa mensual al saldo de ${pendientesGenerar.length} alumno(s) activo(s), por un total de ${formatQ(
                   pendientesGenerar.reduce((s, a) => s + Number(a.tarifaMensual || 0), 0)
                 )}.`) +
@@ -1150,6 +1452,25 @@ function PanelAdmin({ perfil, onLogout }) {
 
 /* ---------------- Vistas ---------------- */
 
+// Tooltip compartido por las gráficas del Resumen, con el mismo estilo
+// (tarjeta blanca, borde suave) que el resto de la app en vez del tooltip
+// genérico de la librería.
+function ChartTooltip({ active, payload, label, formatter }) {
+  if (!active || !payload || payload.length === 0) return null;
+  return (
+    <div style={{ background: "#fff", border: "1px solid #E4E8EA", borderRadius: 8, padding: "8px 11px", boxShadow: "0 6px 16px rgba(38,40,44,0.10)", fontSize: 12.5 }}>
+      <div style={{ color: "#404041", fontWeight: 600, marginBottom: 4 }}>{label}</div>
+      {payload.map((p) => (
+        <div key={p.dataKey} style={{ display: "flex", alignItems: "center", gap: 6, color: "#6C6F72" }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: p.color, display: "inline-block" }} />
+          <span>{p.name}:</span>
+          <span style={{ color: "#404041", fontWeight: 500 }}>{formatter ? formatter(p.value) : p.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ResumenView({
   totalCobradoMes,
   totalPorCobrar,
@@ -1163,8 +1484,11 @@ function ResumenView({
   presentesHoy,
   asistenciasHoyCount,
   onIrAsistencia,
+  chartIngresos,
+  chartAsistencia,
 }) {
   const utilidadPositiva = utilidadMes >= 0;
+  const hayAsistencia = chartAsistencia && chartAsistencia.length > 0;
   return (
     <div className="stack">
       <div className="kpi-grid">
@@ -1244,6 +1568,44 @@ function ResumenView({
         </div>
       </div>
 
+      <div className="stack two-col">
+        <div className="panel">
+          <h2>Cobrado vs. gastos (últimos 6 meses)</h2>
+          <div style={{ width: "100%", height: 220 }}>
+            <ResponsiveContainer>
+              <BarChart data={chartIngresos} margin={{ top: 4, right: 4, left: -12, bottom: 0 }} barGap={2}>
+                <CartesianGrid vertical={false} stroke="#F0F2F3" />
+                <XAxis dataKey="mes" tick={{ fontSize: 12, fill: "#8A8D90" }} axisLine={{ stroke: "#E4E8EA" }} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: "#8A8D90" }} axisLine={false} tickLine={false} width={54} tickFormatter={(v) => `Q${v >= 1000 ? `${Math.round(v / 1000)}k` : v}`} />
+                <Tooltip content={<ChartTooltip formatter={(v) => formatQ(v)} />} cursor={{ fill: "#F4F6F7" }} />
+                <Legend wrapperStyle={{ fontSize: 12.5, color: "#6C6F72" }} iconType="circle" iconSize={8} />
+                <Bar dataKey="Cobrado" fill="#0090C2" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="Gastos" fill="#C13F3B" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="panel">
+          <h2>Asistencia (últimos días con registro)</h2>
+          {!hayAsistencia ? (
+            <div className="empty small">Todavía no hay asistencia marcada para graficar.</div>
+          ) : (
+            <div style={{ width: "100%", height: 220 }}>
+              <ResponsiveContainer>
+                <LineChart data={chartAsistencia} margin={{ top: 4, right: 12, left: -12, bottom: 0 }}>
+                  <CartesianGrid vertical={false} stroke="#F0F2F3" />
+                  <XAxis dataKey="fecha" tick={{ fontSize: 12, fill: "#8A8D90" }} axisLine={{ stroke: "#E4E8EA" }} tickLine={false} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#8A8D90" }} axisLine={false} tickLine={false} width={40} tickFormatter={(v) => `${v}%`} />
+                  <Tooltip content={<ChartTooltip formatter={(v) => `${v}%`} />} cursor={{ stroke: "#E4E8EA" }} />
+                  <Line type="monotone" dataKey="Asistencia" stroke="#00B6F1" strokeWidth={2} dot={{ r: 3, fill: "#00B6F1", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="panel">
         <div className="panel-head">
           <h2>Mayor deuda pendiente</h2>
@@ -1287,11 +1649,40 @@ function AlumnosView({
   onNuevo,
   onEditar,
   onEliminar,
+  onEliminarVarios,
   onToggleActivo,
   pendientesImportarCount,
   onImportar,
   onCorregirSaldo,
 }) {
+  const [seleccionados, setSeleccionados] = useState(() => new Set());
+
+  // Si la lista visible cambia (por búsqueda, o porque se borró alguien),
+  // se quita de la selección a cualquiera que ya no esté en pantalla.
+  useEffect(() => {
+    setSeleccionados((prev) => {
+      const idsVisibles = new Set(alumnos.map((a) => a.id));
+      const next = new Set([...prev].filter((id) => idsVisibles.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alumnos]);
+
+  function toggleUno(id) {
+    setSeleccionados((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleTodos() {
+    setSeleccionados((prev) =>
+      prev.size === alumnos.length ? new Set() : new Set(alumnos.map((a) => a.id))
+    );
+  }
+
   return (
     <div className="stack">
       <div className="toolbar">
@@ -1304,6 +1695,14 @@ function AlumnosView({
           />
         </div>
         <div className="toolbar-actions">
+          {seleccionados.size > 0 && (
+            <button
+              className="btn-danger"
+              onClick={() => onEliminarVarios(Array.from(seleccionados))}
+            >
+              <Trash2 size={16} /> Eliminar seleccionados ({seleccionados.size})
+            </button>
+          )}
           {pendientesImportarCount > 0 && (
             <button className="btn-secondary" onClick={onImportar}>
               Importar listado 2026 ({pendientesImportarCount})
@@ -1324,6 +1723,17 @@ function AlumnosView({
           <table className="table">
             <thead>
               <tr>
+                <th className="th-check">
+                  <input
+                    type="checkbox"
+                    checked={alumnos.length > 0 && seleccionados.size === alumnos.length}
+                    ref={(el) => {
+                      if (el) el.indeterminate = seleccionados.size > 0 && seleccionados.size < alumnos.length;
+                    }}
+                    onChange={toggleTodos}
+                    aria-label="Seleccionar todos"
+                  />
+                </th>
                 <th>Alumno</th>
                 <th>Categoría</th>
                 <th>Horario</th>
@@ -1339,6 +1749,14 @@ function AlumnosView({
                 const tone = saldoTone(Number(a.saldoPendiente || 0), Number(a.tarifaMensual || 0));
                 return (
                   <tr key={a.id} className={a.activo === false ? "row-inactive" : ""}>
+                    <td className="th-check">
+                      <input
+                        type="checkbox"
+                        checked={seleccionados.has(a.id)}
+                        onChange={() => toggleUno(a.id)}
+                        aria-label={`Seleccionar a ${a.nombre}`}
+                      />
+                    </td>
                     <td>
                       <div className="cell-title">
                         {a.nombre}
@@ -1743,8 +2161,17 @@ function GastoView({
   );
 }
 
-function CobroView({ monthLabelStr, pendientesGenerar, cargos, onGenerar }) {
+function CobroView({
+  monthLabelStr,
+  mesesDisponibles,
+  mesSeleccionado,
+  onCambiarMes,
+  pendientesGenerar,
+  cargos,
+  onGenerar,
+}) {
   const total = pendientesGenerar.reduce((s, a) => s + Number(a.tarifaMensual || 0), 0);
+  const hoyKey = monthKeyOf(todayISO());
   return (
     <div className="stack">
       <div className="panel highlight">
@@ -1753,8 +2180,22 @@ function CobroView({ monthLabelStr, pendientesGenerar, cargos, onGenerar }) {
             <h2>Cobro de {monthLabelStr}</h2>
             <p className="muted">
               Suma la tarifa mensual al saldo de cada alumno activo que aún no tenga el cobro de
-              este mes generado. Los alumnos agregados a mitad de mes no se duplican.
+              ese mes generado. Los alumnos agregados a mitad de mes no se duplican. Puedes
+              adelantar el cobro de un mes futuro sin esperar a que llegue la fecha.
             </p>
+            {mesesDisponibles && mesesDisponibles.length > 1 && (
+              <label className="cobro-mes-selector">
+                Mes a cobrar
+                <select value={mesSeleccionado} onChange={(e) => onCambiarMes(e.target.value)}>
+                  {mesesDisponibles.map((m) => (
+                    <option key={m} value={m}>
+                      {monthLabel(m)}
+                      {m === hoyKey ? " (mes actual)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
           <button
             className="btn-primary"
@@ -2248,6 +2689,8 @@ function Styles() {
 
       .cobro-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
       .cobro-preview { margin-top: 12px; font-size: 13px; color: var(--blue-dark); background: #E7F7FD; padding: 8px 12px; border-radius: 8px; display: inline-block; }
+      .cobro-mes-selector { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; font-size: 12px; color: #8A8D90; max-width: 240px; }
+      .cobro-mes-selector select { font-size: 14px; color: var(--ink); padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: #fff; }
 
       .table { width: 100%; border-collapse: collapse; font-size: 13px; }
       .table th { text-align: left; font-weight: 500; color: #8A8D90; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
@@ -2255,6 +2698,8 @@ function Styles() {
       .table tr:last-child td { border-bottom: none; }
       .table .num { text-align: right; }
       .table .debt { color: #C13F3B; font-weight: 600; }
+      .table .th-check { width: 34px; padding-right: 0; }
+      .table .th-check input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
       .row-inactive { opacity: 0.5; }
       .cell-title { font-weight: 500; color: var(--charcoal); }
       .badge-becado { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; color: #B4790A; background: #FCF1DD; padding: 1.5px 7px; border-radius: 999px; vertical-align: middle; }
