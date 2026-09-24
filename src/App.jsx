@@ -363,6 +363,13 @@ function formatDiaLargo(fechaISO) {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
+// Fecha de hoy +/- N días (N negativo = hacia atrás), en formato YYYY-MM-DD.
+function fechaMasDias(dias) {
+  const d = new Date();
+  d.setDate(d.getDate() + dias);
+  return dateKeyLocal(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
 const TIPOS_EVENTO = [
   { value: "entrenamiento", label: "Entrenamiento" },
   { value: "partido", label: "Partido" },
@@ -439,6 +446,69 @@ function mensajeRecordatorioPago(alumno) {
     } tiene un saldo pendiente de ${formatQ(alumno.saldoPendiente)}.`
   );
   lineas.push("Le agradecemos ponerse al día cuando pueda. Cualquier duda, con gusto le apoyamos.");
+  lineas.push("");
+  lineas.push("Atletic Guatemala");
+  return lineas.join("\n");
+}
+
+// Arma el reporte semanal de operación (CRM, cobros, asistencia y próximos
+// eventos) de los últimos 7 días, listo para copiar o mandar por WhatsApp
+// — pensado para el reporte que Alejandro le manda al dueño cada semana.
+function generarReporteSemanal({ leads, alumnos, pagos, asistencias, eventos }) {
+  const hastaKey = todayISO();
+  const desdeKey = fechaMasDias(-6);
+  const desdeFecha = new Date(desdeKey + "T00:00:00");
+  const enUnaSemana = fechaMasDias(7);
+
+  const leadsNuevos = leads.filter((l) => l.createdAt && new Date(l.createdAt) >= desdeFecha);
+  const leadsSinContactar = leads.filter((l) => l.estado === "nuevo").length;
+  const alumnosNuevos = alumnos.filter((a) => a.fechaAlta && a.fechaAlta >= desdeKey);
+
+  const pagosSemana = pagos.filter((p) => p.fecha && p.fecha >= desdeKey);
+  const totalCobrado = pagosSemana.reduce((s, p) => s + Number(p.monto || 0), 0);
+  const alumnosActivos = alumnos.filter((a) => a.activo !== false);
+  const totalPendiente = alumnosActivos.reduce((s, a) => s + Math.max(0, Number(a.saldoPendiente || 0)), 0);
+  const alumnosConDeuda = alumnosActivos.filter((a) => Number(a.saldoPendiente || 0) > 0).length;
+
+  const asistenciasSemana = asistencias.filter((x) => x.fecha && x.fecha >= desdeKey);
+  const presentesSemana = asistenciasSemana.filter((x) => x.presente).length;
+  const pctAsistencia = asistenciasSemana.length
+    ? Math.round((presentesSemana / asistenciasSemana.length) * 100)
+    : null;
+
+  const eventosProximos = eventos
+    .filter((e) => e.fecha && e.fecha >= hastaKey && e.fecha <= enUnaSemana)
+    .sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.hora < b.hora ? -1 : 1));
+
+  const lineas = [];
+  lineas.push("📊 Reporte semanal — Atletic Guatemala");
+  lineas.push(`Del ${formatDiaLargo(desdeKey)} al ${formatDiaLargo(hastaKey)}`);
+  lineas.push("");
+  lineas.push("👥 CRM");
+  lineas.push(`• Leads nuevos: ${leadsNuevos.length}`);
+  lineas.push(`• Sin contactar todavía: ${leadsSinContactar}`);
+  lineas.push(`• Alumnos inscritos esta semana: ${alumnosNuevos.length}`);
+  lineas.push("");
+  lineas.push("💵 Cobros");
+  lineas.push(`• Pagos registrados: ${pagosSemana.length} (${formatQ(totalCobrado)})`);
+  lineas.push(`• Alumnos con saldo pendiente: ${alumnosConDeuda} (${formatQ(totalPendiente)} en total)`);
+  lineas.push("");
+  lineas.push("✅ Asistencia");
+  lineas.push(
+    pctAsistencia === null
+      ? "• Sin asistencia marcada esta semana."
+      : `• ${pctAsistencia}% de asistencia (${presentesSemana}/${asistenciasSemana.length} marcados)`
+  );
+  lineas.push("");
+  lineas.push("📅 Próximos 7 días");
+  if (eventosProximos.length === 0) {
+    lineas.push("• Sin eventos programados.");
+  } else {
+    eventosProximos.slice(0, 8).forEach((e) => {
+      lineas.push(`• ${e.fecha.slice(8, 10)}/${e.fecha.slice(5, 7)} — ${tipoEventoLabel(e.tipo)}: ${e.titulo}`);
+    });
+    if (eventosProximos.length > 8) lineas.push(`• +${eventosProximos.length - 8} más en el calendario.`);
+  }
   lineas.push("");
   lineas.push("Atletic Guatemala");
   return lineas.join("\n");
@@ -1431,6 +1501,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
           { key: "cartera", label: "Cartera" },
           { key: "asistencia", label: "Asistencia" },
           { key: "calendario", label: "Calendario" },
+          { key: "reporte", label: "Reporte semanal" },
         ].map((t) => (
           <button
             key={t.key}
@@ -1521,6 +1592,10 @@ function PanelAdministrativo({ perfil, onLogout }) {
                 filtroCategoria={filtroCategoriaEvento}
                 setFiltroCategoria={setFiltroCategoriaEvento}
               />
+            )}
+
+            {tab === "reporte" && (
+              <ReporteSemanalView leads={leads} alumnos={alumnos} pagos={pagos} asistencias={asistencias} eventos={eventos} />
             )}
           </>
         )}
@@ -2382,6 +2457,7 @@ function PanelAdmin({ perfil, onLogout }) {
           { key: "margen", label: "Margen" },
           { key: "crm", label: "CRM" },
           { key: "calendario", label: "Calendario" },
+          { key: "reporte", label: "Reporte semanal" },
         ].map((t) => (
           <button
             key={t.key}
@@ -2516,6 +2592,10 @@ function PanelAdmin({ perfil, onLogout }) {
                 filtroCategoria={filtroCategoriaEvento}
                 setFiltroCategoria={setFiltroCategoriaEvento}
               />
+            )}
+
+            {tab === "reporte" && (
+              <ReporteSemanalView leads={leads} alumnos={alumnos} pagos={pagos} asistencias={asistencias} eventos={eventos} />
             )}
           </>
         )}
@@ -4618,6 +4698,62 @@ function CarteraView({ alumnosActivos }) {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// Reporte semanal de operación: un resumen de CRM, cobros, asistencia y
+// próximos eventos de los últimos 7 días, ya armado en texto para copiar o
+// mandar por WhatsApp — pensado para el reporte que Alejandro le manda al
+// dueño cada semana, sin tener que armarlo a mano.
+function ReporteSemanalView({ leads, alumnos, pagos, asistencias, eventos }) {
+  const [copiado, setCopiado] = useState(false);
+  const texto = useMemo(
+    () => generarReporteSemanal({ leads, alumnos, pagos, asistencias, eventos }),
+    [leads, alumnos, pagos, asistencias, eventos]
+  );
+
+  async function copiar() {
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2000);
+    } catch {
+      // Si el navegador bloquea el portapapeles, el texto de abajo se
+      // puede seleccionar y copiar a mano — no hace falta más manejo.
+    }
+  }
+
+  return (
+    <div className="stack">
+      <div className="panel">
+        <div className="panel-head">
+          <h2>Reporte semanal</h2>
+          <span className="muted">Últimos 7 días, armado automáticamente</span>
+        </div>
+        <p className="muted" style={{ marginBottom: 10 }}>
+          Revísalo antes de mandarlo — puedes ajustar el texto a mano si hace falta agregar algo.
+        </p>
+        <textarea
+          readOnly
+          rows={18}
+          value={texto}
+          style={{ fontFamily: "inherit", width: "100%", boxSizing: "border-box" }}
+        />
+        <div className="modal-actions" style={{ justifyContent: "flex-start", marginTop: 12 }}>
+          <button type="button" className="btn-secondary" onClick={copiar}>
+            <Copy size={15} /> {copiado ? "¡Copiado!" : "Copiar texto"}
+          </button>
+          <a
+            className="btn-primary"
+            href={`https://wa.me/?text=${encodeURIComponent(texto)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <MessageCircle size={15} /> Abrir en WhatsApp
+          </a>
+        </div>
+      </div>
     </div>
   );
 }
