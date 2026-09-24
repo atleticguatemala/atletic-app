@@ -21,6 +21,9 @@ import {
   FileDown,
   User,
   Camera,
+  Calendar,
+  Copy,
+  MessageCircle,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -251,6 +254,100 @@ function leadToDb(l) {
     notas_internas: l.notasInternas || null,
     fuente: l.fuente || "sitio web",
   };
+}
+
+// Calendario operativo: entrenamientos, partidos, torneos, clínicas,
+// viajes, reuniones, actividades, suspensiones y eventos especiales.
+// "rival", "horaConvocatoria", "uniforme", "indicaciones" y
+// "alumnosConvocados" solo se usan de verdad cuando tipo === "partido"
+// (la convocatoria), pero se guardan igual en cualquier evento por si
+// hace falta más adelante.
+function eventoFromDb(r) {
+  return {
+    id: r.id,
+    titulo: r.titulo,
+    tipo: r.tipo,
+    fecha: r.fecha,
+    hora: r.hora,
+    categoria: r.categoria,
+    horario: r.horario,
+    lugar: r.lugar,
+    rival: r.rival,
+    horaConvocatoria: r.hora_convocatoria,
+    uniforme: r.uniforme,
+    indicaciones: r.indicaciones,
+    notas: r.notas,
+    alumnosConvocados: r.alumnos_convocados || [],
+    createdAt: r.created_at,
+  };
+}
+
+function eventoToDb(e) {
+  return {
+    titulo: e.titulo,
+    tipo: e.tipo,
+    fecha: e.fecha || null,
+    hora: e.hora || null,
+    categoria: e.categoria || null,
+    horario: e.horario || null,
+    lugar: e.lugar || null,
+    rival: e.rival || null,
+    hora_convocatoria: e.horaConvocatoria || null,
+    uniforme: e.uniforme || null,
+    indicaciones: e.indicaciones || null,
+    notas: e.notas || null,
+    alumnos_convocados: e.alumnosConvocados && e.alumnosConvocados.length ? e.alumnosConvocados : null,
+  };
+}
+
+const TIPOS_EVENTO = [
+  { value: "entrenamiento", label: "Entrenamiento" },
+  { value: "partido", label: "Partido" },
+  { value: "torneo", label: "Torneo" },
+  { value: "clinica", label: "Clínica" },
+  { value: "viaje", label: "Viaje" },
+  { value: "reunion", label: "Reunión" },
+  { value: "actividad", label: "Actividad" },
+  { value: "suspension", label: "Suspensión" },
+  { value: "evento_especial", label: "Evento especial" },
+];
+
+function tipoEventoLabel(tipo) {
+  return (TIPOS_EVENTO.find((t) => t.value === tipo) || {}).label || tipo;
+}
+
+// Arma el texto de la convocatoria (o del aviso, para cualquier otro tipo
+// de evento) listo para copiar o mandar directo a WhatsApp.
+function mensajeEvento(evento, nombresConvocados) {
+  const fechaFmt = evento.fecha
+    ? new Date(evento.fecha + "T00:00:00").toLocaleDateString("es-GT", { weekday: "long", day: "numeric", month: "long" })
+    : "";
+  const lineas = [];
+  if (evento.tipo === "partido") {
+    lineas.push(`⚽ Convocatoria — ${evento.titulo || "Partido"}`);
+    if (evento.rival) lineas.push(`Rival: ${evento.rival}`);
+    if (fechaFmt) lineas.push(`Fecha: ${fechaFmt}`);
+    if (evento.horaConvocatoria) lineas.push(`Hora de convocatoria: ${evento.horaConvocatoria}`);
+    if (evento.hora) lineas.push(`Hora del partido: ${evento.hora}`);
+    if (evento.lugar) lineas.push(`Lugar: ${evento.lugar}`);
+    if (evento.uniforme) lineas.push(`Uniforme: ${evento.uniforme}`);
+    if (evento.indicaciones) lineas.push(`Indicaciones: ${evento.indicaciones}`);
+    if (nombresConvocados && nombresConvocados.length) {
+      lineas.push("");
+      lineas.push("Convocados:");
+      nombresConvocados.forEach((n) => lineas.push(`• ${n}`));
+    }
+  } else {
+    lineas.push(`📅 ${tipoEventoLabel(evento.tipo)} — ${evento.titulo || ""}`);
+    if (fechaFmt) lineas.push(`Fecha: ${fechaFmt}`);
+    if (evento.hora) lineas.push(`Hora: ${evento.hora}`);
+    if (evento.lugar) lineas.push(`Lugar: ${evento.lugar}`);
+    if (evento.categoria) lineas.push(`Categoría: ${evento.categoria}`);
+    if (evento.indicaciones) lineas.push(`Indicaciones: ${evento.indicaciones}`);
+  }
+  lineas.push("");
+  lineas.push("Atletic Guatemala");
+  return lineas.join("\n");
 }
 
 // Columnas del pipeline de leads, en el orden fijo que pidió el dueño.
@@ -917,12 +1014,17 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [leads, setLeads] = useState([]);
   const [cargos, setCargos] = useState([]);
   const [asistencias, setAsistencias] = useState([]);
+  const [eventos, setEventos] = useState([]);
   const [tab, setTab] = useState("crm");
   const [toast, setToast] = useState(null);
   const [busqueda, setBusqueda] = useState("");
   const [marcandoIds, setMarcandoIds] = useState(() => new Set());
   const [mesCobroSeleccionado, setMesCobroSeleccionado] = useState(monthKeyOf(todayISO()));
   const [confirmCargo, setConfirmCargo] = useState(false);
+  const [eventoModal, setEventoModal] = useState(null); // null | {} (nuevo) | evento (editar)
+  const [convocatoriaModal, setConvocatoriaModal] = useState(null);
+  const [filtroTipoEvento, setFiltroTipoEvento] = useState("");
+  const [filtroCategoriaEvento, setFiltroCategoriaEvento] = useState("");
 
   const enviandoRef = React.useRef(false);
   const [enviando, setEnviando] = useState(false);
@@ -954,18 +1056,20 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [confirmConvertirLead, setConfirmConvertirLead] = useState(null);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, l, c, s] = await Promise.all([
+    const [a, p, l, c, s, ev] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("leads").select("*").order("created_at", { ascending: false }),
       supabase.from("cargos").select("*").order("created_at", { ascending: false }),
       supabase.from("asistencias").select("*").order("fecha", { ascending: false }),
+      supabase.from("eventos").select("*").order("fecha", { ascending: true }),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
     setLeads((l.data || []).map(leadFromDb));
     setCargos((c.data || []).map(cargoFromDb));
     setAsistencias((s.data || []).map(asistenciaFromDb));
+    setEventos((ev.data || []).map(eventoFromDb));
     if (!silent && !a.error && !p.error && !l.error) {
       showToast(`Datos actualizados: ${(a.data || []).length} alumnos, ${(l.data || []).length} leads.`);
     }
@@ -984,6 +1088,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "cargos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "asistencias" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "eventos" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -1129,6 +1234,29 @@ function PanelAdministrativo({ perfil, onLogout }) {
     }
   }
 
+  async function guardarEvento(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = eventoToDb(data);
+      let error;
+      if (data.id) {
+        ({ error } = await supabase.from("eventos").update(payload).eq("id", data.id));
+      } else {
+        ({ error } = await supabase.from("eventos").insert(payload));
+      }
+      if (!error) {
+        await cargarDatos({ silent: true });
+        setEventoModal(null);
+        showToast(esNuevo ? "Evento agregado." : "Evento actualizado.");
+      } else {
+        showToast("No se pudo guardar el evento (revisa tu conexión). Vuelve a intentarlo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
   async function cambiarEstadoLead(leadId, estado) {
     const { error } = await supabase.from("leads").update({ estado }).eq("id", leadId);
     if (!error) {
@@ -1199,6 +1327,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
           { key: "pago", label: "Registrar pago" },
           { key: "cobro", label: "Cobro mensual" },
           { key: "asistencia", label: "Asistencia" },
+          { key: "calendario", label: "Calendario" },
         ].map((t) => (
           <button
             key={t.key}
@@ -1274,9 +1403,37 @@ function PanelAdministrativo({ perfil, onLogout }) {
                 marcandoIds={marcandoIds}
               />
             )}
+
+            {tab === "calendario" && (
+              <CalendarioView
+                eventos={eventos}
+                alumnos={alumnos}
+                onNuevo={() => setEventoModal({})}
+                onEditar={(e) => setEventoModal(e)}
+                onConvocatoria={(e) => setConvocatoriaModal(e)}
+                filtroTipo={filtroTipoEvento}
+                setFiltroTipo={setFiltroTipoEvento}
+                filtroCategoria={filtroCategoriaEvento}
+                setFiltroCategoria={setFiltroCategoriaEvento}
+              />
+            )}
           </>
         )}
       </main>
+
+      {eventoModal !== null && (
+        <EventoModal
+          initial={eventoModal}
+          alumnos={alumnos}
+          onSave={guardarEvento}
+          onCancel={() => setEventoModal(null)}
+          enviando={enviando}
+        />
+      )}
+
+      {convocatoriaModal && (
+        <ConvocatoriaModal evento={convocatoriaModal} alumnos={alumnos} onCerrar={() => setConvocatoriaModal(null)} />
+      )}
 
       {confirmCargo && (
         <ConfirmDialog
@@ -1353,8 +1510,14 @@ function PanelAdmin({ perfil, onLogout }) {
   const [ajustes, setAjustes] = useState([]);
   const [asistencias, setAsistencias] = useState([]);
   const [leads, setLeads] = useState([]);
+  const [eventos, setEventos] = useState([]);
   const [tab, setTab] = useState("resumen");
   const [toast, setToast] = useState(null);
+  const [eventoModal, setEventoModal] = useState(null); // null | {} (nuevo) | evento (editar)
+  const [convocatoriaModal, setConvocatoriaModal] = useState(null);
+  const [confirmDeleteEvento, setConfirmDeleteEvento] = useState(null);
+  const [filtroTipoEvento, setFiltroTipoEvento] = useState("");
+  const [filtroCategoriaEvento, setFiltroCategoriaEvento] = useState("");
 
   // Evita que un doble clic (u otro disparo repetido) en un botón que
   // guarda datos cree dos registros en vez de uno. enviandoRef se revisa
@@ -1403,7 +1566,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [reloading, setReloading] = useState(false);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, c, g, j, s, l] = await Promise.all([
+    const [a, p, c, g, j, s, l, ev] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("cargos").select("*").order("created_at", { ascending: false }),
@@ -1411,6 +1574,7 @@ function PanelAdmin({ perfil, onLogout }) {
       supabase.from("ajustes").select("*").order("created_at", { ascending: false }),
       supabase.from("asistencias").select("*").order("fecha", { ascending: false }),
       supabase.from("leads").select("*").order("created_at", { ascending: false }),
+      supabase.from("eventos").select("*").order("fecha", { ascending: true }),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -1419,8 +1583,9 @@ function PanelAdmin({ perfil, onLogout }) {
     setAjustes((j.data || []).map(ajusteFromDb));
     setAsistencias((s.data || []).map(asistenciaFromDb));
     setLeads((l.data || []).map(leadFromDb));
+    setEventos((ev.data || []).map(eventoFromDb));
 
-    const algunFallo = [a, p, c, g, j, s, l].some((r) => r.error);
+    const algunFallo = [a, p, c, g, j, s, l, ev].some((r) => r.error);
     if (algunFallo) {
       showToast(
         "No se pudo cargar toda tu información (revisa tu conexión). Dale a \"Recargar\" para intentar de nuevo.",
@@ -1444,6 +1609,7 @@ function PanelAdmin({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "ajustes" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "asistencias" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "eventos" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -1596,6 +1762,45 @@ function PanelAdmin({ perfil, onLogout }) {
           "No se pudo eliminar (revisa tu conexión). Nadie se borró — inténtalo de nuevo.",
           true
         );
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function guardarEvento(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = eventoToDb(data);
+      let error;
+      if (data.id) {
+        ({ error } = await supabase.from("eventos").update(payload).eq("id", data.id));
+      } else {
+        ({ error } = await supabase.from("eventos").insert(payload));
+      }
+      if (!error) {
+        await cargarDatos({ silent: true });
+        setEventoModal(null);
+        showToast(esNuevo ? "Evento agregado." : "Evento actualizado.");
+      } else {
+        showToast("No se pudo guardar el evento (revisa tu conexión). Vuelve a intentarlo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarEvento(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("eventos").delete().eq("id", id);
+      setConfirmDeleteEvento(null);
+      if (!error) {
+        setEventos((prev) => prev.filter((e) => e.id !== id));
+        showToast("Evento eliminado.");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Sigue en tu calendario — inténtalo de nuevo.", true);
       }
     } finally {
       terminarEnvio();
@@ -2045,6 +2250,7 @@ function PanelAdmin({ perfil, onLogout }) {
           { key: "asistencia", label: "Asistencia" },
           { key: "margen", label: "Margen" },
           { key: "crm", label: "CRM" },
+          { key: "calendario", label: "Calendario" },
         ].map((t) => (
           <button
             key={t.key}
@@ -2162,9 +2368,49 @@ function PanelAdmin({ perfil, onLogout }) {
                 onAbrirLead={(l) => setLeadModal(l)}
               />
             )}
+
+            {tab === "calendario" && (
+              <CalendarioView
+                eventos={eventos}
+                alumnos={alumnos}
+                onNuevo={() => setEventoModal({})}
+                onEditar={(e) => setEventoModal(e)}
+                onEliminar={(e) => setConfirmDeleteEvento(e)}
+                onConvocatoria={(e) => setConvocatoriaModal(e)}
+                filtroTipo={filtroTipoEvento}
+                setFiltroTipo={setFiltroTipoEvento}
+                filtroCategoria={filtroCategoriaEvento}
+                setFiltroCategoria={setFiltroCategoriaEvento}
+              />
+            )}
           </>
         )}
       </main>
+
+      {eventoModal !== null && (
+        <EventoModal
+          initial={eventoModal}
+          alumnos={alumnos}
+          onSave={guardarEvento}
+          onCancel={() => setEventoModal(null)}
+          enviando={enviando}
+        />
+      )}
+
+      {convocatoriaModal && (
+        <ConvocatoriaModal evento={convocatoriaModal} alumnos={alumnos} onCerrar={() => setConvocatoriaModal(null)} />
+      )}
+
+      {confirmDeleteEvento && (
+        <ConfirmDialog
+          title={`¿Eliminar "${confirmDeleteEvento.titulo}"?`}
+          body="Se borrará este evento del calendario y no podrá deshacerse."
+          confirmLabel="Eliminar"
+          onConfirm={() => eliminarEvento(confirmDeleteEvento.id)}
+          onCancel={() => setConfirmDeleteEvento(null)}
+          disabled={enviando}
+        />
+      )}
 
       {alumnoModal !== null && (
         <AlumnoModal
@@ -3301,6 +3547,341 @@ function MargenView({ alumnosActivos, totalGastosMes, monthLabelStr }) {
       <div className="stack two-col">
         <TablaMargen titulo="Por categoría" filas={porCategoria} />
         <TablaMargen titulo="Por horario" filas={porHorario} />
+      </div>
+    </div>
+  );
+}
+
+// Calendario operativo: lista de eventos (no una grilla de mes — para lo
+// que necesita la academia, una lista ordenada por fecha con filtros es
+// más rápida de leer y de mantener desde el celular que un calendario
+// visual). Cada evento de tipo "partido" tiene un botón de Convocatoria
+// aparte.
+function CalendarioView({ eventos, alumnos, onNuevo, onEditar, onEliminar, onConvocatoria, filtroTipo, setFiltroTipo, filtroCategoria, setFiltroCategoria }) {
+  const hoyKey = todayISO();
+  const eventosFiltrados = eventos
+    .filter((e) => (filtroTipo ? e.tipo === filtroTipo : true))
+    .filter((e) => (filtroCategoria ? e.categoria === filtroCategoria : true))
+    .sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
+  const proximos = eventosFiltrados.filter((e) => e.fecha >= hoyKey);
+  const pasados = eventosFiltrados.filter((e) => e.fecha < hoyKey).reverse();
+
+  function FilaEvento({ e }) {
+    return (
+      <div className="panel evento-fila">
+        <div className="evento-fila-fecha">
+          <div className="evento-fila-dia">{e.fecha ? e.fecha.slice(8, 10) : "—"}</div>
+          <div className="evento-fila-mes">{e.fecha ? monthLabel(e.fecha.slice(0, 7)).slice(0, 3) : ""}</div>
+        </div>
+        <div className="evento-fila-info">
+          <div className="evento-fila-titulo">
+            <span className={"evento-tipo-pill evento-tipo-" + e.tipo}>{tipoEventoLabel(e.tipo)}</span>
+            {e.titulo}
+          </div>
+          <div className="muted" style={{ fontSize: 13 }}>
+            {[e.hora, e.categoria, e.lugar].filter(Boolean).join(" · ") || "Sin más detalles"}
+          </div>
+        </div>
+        <div className="evento-fila-acciones">
+          {e.tipo === "partido" && (
+            <button className="btn-secondary" onClick={() => onConvocatoria(e)}>
+              <MessageCircle size={15} /> Convocatoria
+            </button>
+          )}
+          <button className="icon-btn" onClick={() => onEditar(e)} aria-label="Editar">
+            <Pencil size={16} />
+          </button>
+          {onEliminar && (
+            <button className="icon-btn danger" onClick={() => onEliminar(e)} aria-label="Eliminar">
+              <Trash2 size={16} />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="stack">
+      <div className="toolbar">
+        <div className="toolbar-actions" style={{ flexWrap: "wrap" }}>
+          <select value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)}>
+            <option value="">Todos los tipos</option>
+            {TIPOS_EVENTO.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+          <select value={filtroCategoria} onChange={(e) => setFiltroCategoria(e.target.value)}>
+            <option value="">Todas las categorías</option>
+            {CATEGORIAS.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button className="btn-primary" onClick={onNuevo}>
+          <Plus size={16} /> Nuevo evento
+        </button>
+      </div>
+
+      {proximos.length === 0 ? (
+        <div className="empty">No hay eventos próximos. Agrega el primero con el botón de arriba.</div>
+      ) : (
+        <div className="stack" style={{ gap: 8 }}>
+          {proximos.map((e) => (
+            <FilaEvento key={e.id} e={e} />
+          ))}
+        </div>
+      )}
+
+      {pasados.length > 0 && (
+        <details style={{ marginTop: 12 }}>
+          <summary className="muted" style={{ cursor: "pointer" }}>
+            Eventos pasados ({pasados.length})
+          </summary>
+          <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+            {pasados.map((e) => (
+              <FilaEvento key={e.id} e={e} />
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function EventoModal({ initial, alumnos, onSave, onCancel, enviando }) {
+  const [form, setForm] = useState({
+    id: initial.id || null,
+    titulo: initial.titulo || "",
+    tipo: initial.tipo || "entrenamiento",
+    fecha: initial.fecha || todayISO(),
+    hora: initial.hora || "",
+    categoria: initial.categoria || "",
+    horario: initial.horario || "",
+    lugar: initial.lugar || "",
+    rival: initial.rival || "",
+    horaConvocatoria: initial.horaConvocatoria || "",
+    uniforme: initial.uniforme || "",
+    indicaciones: initial.indicaciones || "",
+    notas: initial.notas || "",
+    alumnosConvocados: initial.alumnosConvocados || [],
+  });
+  const [error, setError] = useState(null);
+  const esPartido = form.tipo === "partido";
+
+  const alumnosDeCategoria = form.categoria
+    ? alumnos.filter((a) => a.categoria === form.categoria && a.activo !== false)
+    : alumnos.filter((a) => a.activo !== false);
+
+  function toggleConvocado(id) {
+    setForm((prev) => {
+      const set = new Set(prev.alumnosConvocados);
+      if (set.has(id)) set.delete(id);
+      else set.add(id);
+      return { ...prev, alumnosConvocados: Array.from(set) };
+    });
+  }
+
+  function handleSubmit(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!form.titulo.trim()) {
+      setError("Escribe un título para el evento.");
+      return;
+    }
+    if (!form.fecha) {
+      setError("Elige una fecha.");
+      return;
+    }
+    setError(null);
+    onSave(form);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{form.id ? "Editar evento" : "Nuevo evento"}</h3>
+          <button className="icon-btn" onClick={onCancel} aria-label="Cerrar">
+            <X size={18} />
+          </button>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="form">
+          <label>
+            Título
+            <input
+              type="text"
+              value={form.titulo}
+              onChange={(e) => setForm({ ...form, titulo: e.target.value })}
+              placeholder={esPartido ? "Ej: Atletic vs. Halcones" : "Ej: Entrenamiento categoría 2014-2015"}
+              autoFocus
+            />
+          </label>
+          <div className="form-row">
+            <label>
+              Tipo
+              <select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+                {TIPOS_EVENTO.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Categoría
+              <select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
+                <option value="">(todas / no aplica)</option>
+                {CATEGORIAS.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="form-row">
+            <label>
+              Fecha
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
+            </label>
+            <label>
+              Hora {esPartido ? "del partido" : ""}
+              <input type="time" value={form.hora} onChange={(e) => setForm({ ...form, hora: e.target.value })} />
+            </label>
+          </div>
+          <label>
+            Lugar
+            <input type="text" value={form.lugar} onChange={(e) => setForm({ ...form, lugar: e.target.value })} />
+          </label>
+
+          {esPartido && (
+            <>
+              <div className="form-row">
+                <label>
+                  Rival
+                  <input type="text" value={form.rival} onChange={(e) => setForm({ ...form, rival: e.target.value })} />
+                </label>
+                <label>
+                  Hora de convocatoria
+                  <input
+                    type="time"
+                    value={form.horaConvocatoria}
+                    onChange={(e) => setForm({ ...form, horaConvocatoria: e.target.value })}
+                  />
+                </label>
+              </div>
+              <label>
+                Uniforme
+                <input type="text" value={form.uniforme} onChange={(e) => setForm({ ...form, uniforme: e.target.value })} />
+              </label>
+              <label>
+                Indicaciones especiales
+                <textarea
+                  rows={2}
+                  value={form.indicaciones}
+                  onChange={(e) => setForm({ ...form, indicaciones: e.target.value })}
+                />
+              </label>
+              <div>
+                <div className="form-section-label">
+                  Convocados ({form.alumnosConvocados.length})
+                  {!form.categoria && <span className="muted"> — elige una categoría para filtrar la lista</span>}
+                </div>
+                <div className="evento-convocados-lista">
+                  {alumnosDeCategoria.length === 0 ? (
+                    <p className="muted">No hay alumnos activos en esta categoría.</p>
+                  ) : (
+                    alumnosDeCategoria.map((a) => (
+                      <label key={a.id} className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={form.alumnosConvocados.includes(a.id)}
+                          onChange={() => toggleConvocado(a.id)}
+                        />
+                        {a.nombre}
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+
+          {!esPartido && (
+            <label>
+              Notas
+              <textarea rows={2} value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} />
+            </label>
+          )}
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="btn-secondary" onClick={onCancel} disabled={enviando}>
+            Cancelar
+          </button>
+          <button type="button" className="btn-primary" onClick={handleSubmit} disabled={enviando}>
+            {enviando ? "Guardando…" : "Guardar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Muestra el mensaje ya armado (convocatoria de partido, o aviso de
+// cualquier otro tipo de evento) listo para copiar o abrir directo en
+// WhatsApp — el dueño elige a qué grupo/contacto mandarlo desde ahí, la
+// app no manda nada por su cuenta.
+function ConvocatoriaModal({ evento, alumnos, onCerrar }) {
+  const nombresConvocados = (evento.alumnosConvocados || [])
+    .map((id) => {
+      const a = alumnos.find((x) => x.id === id);
+      return a ? a.nombre : null;
+    })
+    .filter(Boolean);
+  const texto = mensajeEvento(evento, nombresConvocados);
+  const [copiado, setCopiado] = useState(false);
+
+  async function copiar() {
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2000);
+    } catch {
+      // Si el navegador bloquea el portapapeles, el textarea de abajo se
+      // puede seleccionar y copiar a mano — no hace falta más manejo.
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onCerrar}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{evento.tipo === "partido" ? "Convocatoria" : "Aviso"}</h3>
+          <button className="icon-btn" onClick={onCerrar} aria-label="Cerrar">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="form">
+          <textarea readOnly rows={12} value={texto} style={{ fontFamily: "inherit" }} />
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="btn-secondary" onClick={copiar}>
+            <Copy size={15} /> {copiado ? "¡Copiado!" : "Copiar texto"}
+          </button>
+          <a
+            className="btn-primary"
+            href={`https://wa.me/?text=${encodeURIComponent(texto)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <MessageCircle size={15} /> Abrir en WhatsApp
+          </a>
+        </div>
       </div>
     </div>
   );
@@ -4485,6 +5066,22 @@ function Styles() {
       .form-section-label { font-size: 12px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; color: #8A8D90; border-top: 1px solid var(--border-soft); padding-top: 14px; margin-top: 2px; }
       .edad-calculada { font-size: 12px; color: #8A8D90; font-weight: 400; }
       .cell-sub { font-size: 12px; color: #8A8D90; margin-top: 1px; }
+
+      /* Calendario operativo */
+      .checkbox-item { display: flex; align-items: center; gap: 8px; font-weight: 400; font-size: 14px; padding: 4px 0; }
+      .evento-convocados-lista { max-height: 220px; overflow-y: auto; border: 1px solid var(--border-soft); border-radius: 10px; padding: 8px 12px; margin-top: 6px; }
+      .evento-fila { display: flex; align-items: center; gap: 14px; padding: 12px 14px; }
+      .evento-fila-fecha { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 46px; flex-shrink: 0; background: var(--bg-soft, #F4F6F8); border-radius: 8px; padding: 6px 0; }
+      .evento-fila-dia { font-size: 18px; font-weight: 700; color: var(--charcoal); line-height: 1; }
+      .evento-fila-mes { font-size: 11px; text-transform: uppercase; color: #8A8D90; margin-top: 2px; }
+      .evento-fila-info { flex: 1; min-width: 0; }
+      .evento-fila-titulo { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .evento-fila-acciones { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+      .evento-tipo-pill { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; padding: 2px 8px; border-radius: 999px; background: #E7F7FD; color: #0090C2; }
+      .evento-tipo-partido { background: #FBEAE9; color: #C13F3B; }
+      .evento-tipo-torneo { background: #FBEAE9; color: #C13F3B; }
+      .evento-tipo-entrenamiento { background: #E7F7F1; color: #158F63; }
+      .evento-tipo-suspension { background: #F1EAFB; color: #6B3FC1; }
 
       .badge { padding: 3px 10px; border-radius: var(--radius-pill); font-weight: 600; font-size: 12.5px; white-space: nowrap; }
       .pill-toggle {
