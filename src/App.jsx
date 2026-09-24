@@ -4361,6 +4361,9 @@ function LeadCard({ lead, onAbrir, onCambiarEstado }) {
         <div className="cell-title">{lead.nombreAlumno || "(sin nombre)"}</div>
         {telefono && <div className="cell-sub">{telefono}</div>}
         {programas && <div className="cell-sub crm-card-programa">{programas}</div>}
+        {lead.fechaPrueba && (
+          <div className="cell-sub crm-card-prueba">Prueba deseada: {formatDiaLargo(lead.fechaPrueba)}</div>
+        )}
         <div className="crm-card-dias">
           {dias === null ? "" : dias === 0 ? "Hoy" : `Hace ${dias} día(s)`}
         </div>
@@ -4424,6 +4427,10 @@ function LeadDetalleModal({ lead, onCerrar, onGuardarNotas, onConvertir, enviand
             <DetalleCampo label="Posición" valor={lead.posicion} />
             <DetalleCampo label="Talla de uniforme" valor={lead.tallaUniforme} />
             <DetalleCampo label="Programa(s)" valor={(lead.programas || []).join(", ")} />
+            <DetalleCampo
+              label="Día preferido para la prueba"
+              valor={lead.fechaPrueba ? formatDiaLargo(lead.fechaPrueba) : null}
+            />
           </div>
 
           <div className="form-section-label">Padre</div>
@@ -5781,6 +5788,7 @@ function Styles() {
       .crm-card-main { display: flex; flex-direction: column; gap: 2px; text-align: left; background: none; border: none; padding: 0; cursor: pointer; font-family: var(--font-body); }
       .crm-card-main:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
       .crm-card-programa { color: #6C6F72; }
+      .crm-card-prueba { color: #0090C2; font-weight: 600; }
       .crm-card-dias { font-size: 11px; color: #8A8D90; margin-top: 3px; }
       .crm-card-select {
         font-family: var(--font-body); font-size: 12px; padding: 6px 8px; border-radius: var(--radius-sm);
