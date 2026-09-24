@@ -3092,7 +3092,7 @@ function Styles() {
       .tab:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
       .tab.active { color: var(--blue-dark); border-bottom-color: var(--blue); font-weight: 600; }
 
-      .content { padding: 22px; }
+      .content { padding: 22px; background: linear-gradient(180deg, #E1F4FC 0%, var(--bg) 380px); }
       .stack { display: flex; flex-direction: column; gap: 18px; }
       .two-col { flex-direction: row; align-items: flex-start; flex-wrap: wrap; }
       .two-col > .panel { flex: 1 1 320px; }
