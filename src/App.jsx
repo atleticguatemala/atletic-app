@@ -269,7 +269,7 @@ function eventoFromDb(r) {
     tipo: r.tipo,
     fecha: r.fecha,
     hora: r.hora,
-    categoria: r.categoria,
+    categorias: r.categorias || [],
     horario: r.horario,
     lugar: r.lugar,
     rival: r.rival,
@@ -278,6 +278,7 @@ function eventoFromDb(r) {
     indicaciones: r.indicaciones,
     notas: r.notas,
     alumnosConvocados: r.alumnos_convocados || [],
+    serieId: r.serie_id,
     createdAt: r.created_at,
   };
 }
@@ -288,7 +289,7 @@ function eventoToDb(e) {
     tipo: e.tipo,
     fecha: e.fecha || null,
     hora: e.hora || null,
-    categoria: e.categoria || null,
+    categorias: e.categorias && e.categorias.length ? e.categorias : null,
     horario: e.horario || null,
     lugar: e.lugar || null,
     rival: e.rival || null,
@@ -297,7 +298,69 @@ function eventoToDb(e) {
     indicaciones: e.indicaciones || null,
     notas: e.notas || null,
     alumnos_convocados: e.alumnosConvocados && e.alumnosConvocados.length ? e.alumnosConvocados : null,
+    serie_id: e.serieId || null,
   };
+}
+
+// Genera las fechas de las repeticiones de un evento (incluida la
+// primera), desde "fecha" hasta "hasta" (incluida), según "frecuencia".
+// Tope de 52 fechas como protección — nadie necesita repetir un evento
+// más de un año seguido, y evita que un error de captura (una fecha
+// "hasta" muy lejana) genere miles de filas sin querer.
+function fechasRecurrencia(fecha, frecuencia, hasta) {
+  const fechas = [fecha];
+  if (!frecuencia || frecuencia === "ninguna" || !hasta) return fechas;
+  const pasoDias = frecuencia === "semanal" ? 7 : frecuencia === "quincenal" ? 14 : null; // "mensual" se maneja aparte
+  let actual = new Date(fecha + "T00:00:00");
+  const limite = new Date(hasta + "T00:00:00");
+  while (fechas.length < 52) {
+    if (pasoDias) {
+      actual = new Date(actual.getTime() + pasoDias * 86400000);
+    } else {
+      actual = new Date(actual.getFullYear(), actual.getMonth() + 1, actual.getDate());
+    }
+    if (actual > limite) break;
+    fechas.push(actual.toISOString().slice(0, 10));
+  }
+  return fechas;
+}
+
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+// Arma la clave "YYYY-MM-DD" a partir de año/mes(0-indexado)/día locales,
+// sin pasar por toISOString() (que convierte a UTC y puede correr la
+// fecha un día si el navegador está en una zona horaria negativa).
+function dateKeyLocal(year, monthIndex, day) {
+  return `${year}-${pad2(monthIndex + 1)}-${pad2(day)}`;
+}
+
+const DIAS_SEMANA_CORTOS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+
+// Arma la grilla de 42 celdas (6 semanas de 7 días, empezando en lunes)
+// que cubre el mes visible, incluyendo los días de los meses vecinos que
+// completan la primera y la última semana.
+function construirMatrizMes(year, monthIndex) {
+  const primerDia = new Date(year, monthIndex, 1);
+  const offset = (primerDia.getDay() + 6) % 7; // getDay(): 0=Dom..6=Sáb → queremos que la semana empiece en lunes
+  const inicio = new Date(year, monthIndex, 1 - offset);
+  const hoyKey = todayISO();
+  const celdas = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(inicio.getFullYear(), inicio.getMonth(), inicio.getDate() + i);
+    const key = dateKeyLocal(d.getFullYear(), d.getMonth(), d.getDate());
+    celdas.push({ key, dia: d.getDate(), enMes: d.getMonth() === monthIndex, esHoy: key === hoyKey });
+  }
+  return celdas;
+}
+
+function formatDiaLargo(fechaISO) {
+  if (!fechaISO) return "";
+  const [y, m, d] = fechaISO.split("-").map(Number);
+  const fecha = new Date(y, m - 1, d);
+  const label = fecha.toLocaleDateString("es-GT", { weekday: "long", day: "numeric", month: "long" });
+  return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
 const TIPOS_EVENTO = [
@@ -342,7 +405,7 @@ function mensajeEvento(evento, nombresConvocados) {
     if (fechaFmt) lineas.push(`Fecha: ${fechaFmt}`);
     if (evento.hora) lineas.push(`Hora: ${evento.hora}`);
     if (evento.lugar) lineas.push(`Lugar: ${evento.lugar}`);
-    if (evento.categoria) lineas.push(`Categoría: ${evento.categoria}`);
+    if (evento.categorias && evento.categorias.length) lineas.push(`Categoría(s): ${evento.categorias.join(", ")}`);
     if (evento.indicaciones) lineas.push(`Indicaciones: ${evento.indicaciones}`);
   }
   lineas.push("");
@@ -1238,12 +1301,20 @@ function PanelAdministrativo({ perfil, onLogout }) {
     if (!iniciarEnvio()) return;
     try {
       const esNuevo = !data.id;
-      const payload = eventoToDb(data);
       let error;
       if (data.id) {
+        const payload = eventoToDb(data);
         ({ error } = await supabase.from("eventos").update(payload).eq("id", data.id));
+      } else if (data.repetir && data.frecuencia !== "ninguna" && data.hasta) {
+        // Evento con repetición: se generan varias filas (una por fecha),
+        // todas compartiendo un serie_id para poder identificarlas como
+        // parte de la misma serie más adelante.
+        const fechas = fechasRecurrencia(data.fecha, data.frecuencia, data.hasta);
+        const serieId = crypto.randomUUID ? crypto.randomUUID() : uid();
+        const filas = fechas.map((fecha) => ({ ...eventoToDb(data), fecha, serie_id: serieId }));
+        ({ error } = await supabase.from("eventos").insert(filas));
       } else {
-        ({ error } = await supabase.from("eventos").insert(payload));
+        ({ error } = await supabase.from("eventos").insert(eventoToDb(data)));
       }
       if (!error) {
         await cargarDatos({ silent: true });
@@ -1408,7 +1479,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
               <CalendarioView
                 eventos={eventos}
                 alumnos={alumnos}
-                onNuevo={() => setEventoModal({})}
+                onNuevo={(fecha) => setEventoModal(fecha ? { fecha } : {})}
                 onEditar={(e) => setEventoModal(e)}
                 onConvocatoria={(e) => setConvocatoriaModal(e)}
                 filtroTipo={filtroTipoEvento}
@@ -1516,6 +1587,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [eventoModal, setEventoModal] = useState(null); // null | {} (nuevo) | evento (editar)
   const [convocatoriaModal, setConvocatoriaModal] = useState(null);
   const [confirmDeleteEvento, setConfirmDeleteEvento] = useState(null);
+  const [confirmDeleteSerieEvento, setConfirmDeleteSerieEvento] = useState(null);
   const [filtroTipoEvento, setFiltroTipoEvento] = useState("");
   const [filtroCategoriaEvento, setFiltroCategoriaEvento] = useState("");
 
@@ -1772,12 +1844,20 @@ function PanelAdmin({ perfil, onLogout }) {
     if (!iniciarEnvio()) return;
     try {
       const esNuevo = !data.id;
-      const payload = eventoToDb(data);
       let error;
       if (data.id) {
+        const payload = eventoToDb(data);
         ({ error } = await supabase.from("eventos").update(payload).eq("id", data.id));
+      } else if (data.repetir && data.frecuencia !== "ninguna" && data.hasta) {
+        // Evento con repetición: se generan varias filas (una por fecha),
+        // todas compartiendo un serie_id para poder identificarlas como
+        // parte de la misma serie más adelante.
+        const fechas = fechasRecurrencia(data.fecha, data.frecuencia, data.hasta);
+        const serieId = crypto.randomUUID ? crypto.randomUUID() : uid();
+        const filas = fechas.map((fecha) => ({ ...eventoToDb(data), fecha, serie_id: serieId }));
+        ({ error } = await supabase.from("eventos").insert(filas));
       } else {
-        ({ error } = await supabase.from("eventos").insert(payload));
+        ({ error } = await supabase.from("eventos").insert(eventoToDb(data)));
       }
       if (!error) {
         await cargarDatos({ silent: true });
@@ -1801,6 +1881,22 @@ function PanelAdmin({ perfil, onLogout }) {
         showToast("Evento eliminado.");
       } else {
         showToast("No se pudo eliminar (revisa tu conexión). Sigue en tu calendario — inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarSerieEvento(serieId) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("eventos").delete().eq("serie_id", serieId);
+      setConfirmDeleteSerieEvento(null);
+      if (!error) {
+        setEventos((prev) => prev.filter((e) => e.serieId !== serieId));
+        showToast("Serie de eventos eliminada.");
+      } else {
+        showToast("No se pudo eliminar la serie (revisa tu conexión). Inténtalo de nuevo.", true);
       }
     } finally {
       terminarEnvio();
@@ -2373,9 +2469,10 @@ function PanelAdmin({ perfil, onLogout }) {
               <CalendarioView
                 eventos={eventos}
                 alumnos={alumnos}
-                onNuevo={() => setEventoModal({})}
+                onNuevo={(fecha) => setEventoModal(fecha ? { fecha } : {})}
                 onEditar={(e) => setEventoModal(e)}
                 onEliminar={(e) => setConfirmDeleteEvento(e)}
+                onEliminarSerie={(e) => setConfirmDeleteSerieEvento(e)}
                 onConvocatoria={(e) => setConvocatoriaModal(e)}
                 filtroTipo={filtroTipoEvento}
                 setFiltroTipo={setFiltroTipoEvento}
@@ -2404,10 +2501,22 @@ function PanelAdmin({ perfil, onLogout }) {
       {confirmDeleteEvento && (
         <ConfirmDialog
           title={`¿Eliminar "${confirmDeleteEvento.titulo}"?`}
-          body="Se borrará este evento del calendario y no podrá deshacerse."
+          body="Se borrará solo esta fecha del calendario y no podrá deshacerse."
           confirmLabel="Eliminar"
           onConfirm={() => eliminarEvento(confirmDeleteEvento.id)}
           onCancel={() => setConfirmDeleteEvento(null)}
+          disabled={enviando}
+        />
+      )}
+
+      {confirmDeleteSerieEvento && (
+        <ConfirmDialog
+          title={`¿Eliminar toda la serie "${confirmDeleteSerieEvento.titulo}"?`}
+          body="Se borrarán todas las fechas repetidas de este evento (pasadas y futuras) y no podrá deshacerse."
+          confirmLabel="Eliminar serie"
+          danger
+          onConfirm={() => eliminarSerieEvento(confirmDeleteSerieEvento.serieId)}
+          onCancel={() => setConfirmDeleteSerieEvento(null)}
           disabled={enviando}
         />
       )}
@@ -3552,53 +3661,41 @@ function MargenView({ alumnosActivos, totalGastosMes, monthLabelStr }) {
   );
 }
 
-// Calendario operativo: lista de eventos (no una grilla de mes — para lo
-// que necesita la academia, una lista ordenada por fecha con filtros es
-// más rápida de leer y de mantener desde el celular que un calendario
-// visual). Cada evento de tipo "partido" tiene un botón de Convocatoria
-// aparte.
-function CalendarioView({ eventos, alumnos, onNuevo, onEditar, onEliminar, onConvocatoria, filtroTipo, setFiltroTipo, filtroCategoria, setFiltroCategoria }) {
-  const hoyKey = todayISO();
-  const eventosFiltrados = eventos
-    .filter((e) => (filtroTipo ? e.tipo === filtroTipo : true))
-    .filter((e) => (filtroCategoria ? e.categoria === filtroCategoria : true))
-    .sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
-  const proximos = eventosFiltrados.filter((e) => e.fecha >= hoyKey);
-  const pasados = eventosFiltrados.filter((e) => e.fecha < hoyKey).reverse();
+// Calendario operativo: grilla de mes estilo Google Calendar. Cada celda
+// muestra los eventos de ese día (como pastillas de color según el tipo);
+// al hacer clic en un día se selecciona y se abre el panel de abajo con el
+// detalle de sus eventos y el botón para agregar uno nuevo justo ahí. Un
+// evento de tipo "partido" tiene además su botón de Convocatoria aparte.
+function CalendarioView({ eventos, alumnos, onNuevo, onEditar, onEliminar, onEliminarSerie, onConvocatoria, filtroTipo, setFiltroTipo, filtroCategoria, setFiltroCategoria }) {
+  const hoy = new Date();
+  const [mesVisible, setMesVisible] = useState(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
+  const [diaSeleccionado, setDiaSeleccionado] = useState(todayISO());
 
-  function FilaEvento({ e }) {
-    return (
-      <div className="panel evento-fila">
-        <div className="evento-fila-fecha">
-          <div className="evento-fila-dia">{e.fecha ? e.fecha.slice(8, 10) : "—"}</div>
-          <div className="evento-fila-mes">{e.fecha ? monthLabel(e.fecha.slice(0, 7)).slice(0, 3) : ""}</div>
-        </div>
-        <div className="evento-fila-info">
-          <div className="evento-fila-titulo">
-            <span className={"evento-tipo-pill evento-tipo-" + e.tipo}>{tipoEventoLabel(e.tipo)}</span>
-            {e.titulo}
-          </div>
-          <div className="muted" style={{ fontSize: 13 }}>
-            {[e.hora, e.categoria, e.lugar].filter(Boolean).join(" · ") || "Sin más detalles"}
-          </div>
-        </div>
-        <div className="evento-fila-acciones">
-          {e.tipo === "partido" && (
-            <button className="btn-secondary" onClick={() => onConvocatoria(e)}>
-              <MessageCircle size={15} /> Convocatoria
-            </button>
-          )}
-          <button className="icon-btn" onClick={() => onEditar(e)} aria-label="Editar">
-            <Pencil size={16} />
-          </button>
-          {onEliminar && (
-            <button className="icon-btn danger" onClick={() => onEliminar(e)} aria-label="Eliminar">
-              <Trash2 size={16} />
-            </button>
-          )}
-        </div>
-      </div>
-    );
+  const eventosFiltrados = eventos.filter(
+    (e) =>
+      (filtroTipo ? e.tipo === filtroTipo : true) &&
+      (filtroCategoria ? (e.categorias || []).includes(filtroCategoria) : true)
+  );
+
+  const eventosPorDia = {};
+  eventosFiltrados.forEach((e) => {
+    if (!e.fecha) return;
+    if (!eventosPorDia[e.fecha]) eventosPorDia[e.fecha] = [];
+    eventosPorDia[e.fecha].push(e);
+  });
+  Object.values(eventosPorDia).forEach((lista) => lista.sort((a, b) => (a.hora || "").localeCompare(b.hora || "")));
+
+  const celdas = construirMatrizMes(mesVisible.getFullYear(), mesVisible.getMonth());
+  const eventosDelDia = eventosPorDia[diaSeleccionado] || [];
+
+  function irMes(delta) {
+    setMesVisible((prev) => new Date(prev.getFullYear(), prev.getMonth() + delta, 1));
+  }
+
+  function irHoy() {
+    const h = new Date();
+    setMesVisible(new Date(h.getFullYear(), h.getMonth(), 1));
+    setDiaSeleccionado(todayISO());
   }
 
   return (
@@ -3622,33 +3719,139 @@ function CalendarioView({ eventos, alumnos, onNuevo, onEditar, onEliminar, onCon
             ))}
           </select>
         </div>
-        <button className="btn-primary" onClick={onNuevo}>
+        <button className="btn-primary" onClick={() => onNuevo(diaSeleccionado)}>
           <Plus size={16} /> Nuevo evento
         </button>
       </div>
 
-      {proximos.length === 0 ? (
-        <div className="empty">No hay eventos próximos. Agrega el primero con el botón de arriba.</div>
-      ) : (
-        <div className="stack" style={{ gap: 8 }}>
-          {proximos.map((e) => (
-            <FilaEvento key={e.id} e={e} />
-          ))}
+      <div className="calendario-header">
+        <div className="calendario-nav">
+          <button className="icon-btn" onClick={() => irMes(-1)} aria-label="Mes anterior">
+            ‹
+          </button>
+          <div className="calendario-mes-label">
+            {monthLabel(`${mesVisible.getFullYear()}-${pad2(mesVisible.getMonth() + 1)}`)}
+          </div>
+          <button className="icon-btn" onClick={() => irMes(1)} aria-label="Mes siguiente">
+            ›
+          </button>
         </div>
-      )}
+        <button className="btn-secondary" onClick={irHoy}>
+          Hoy
+        </button>
+      </div>
 
-      {pasados.length > 0 && (
-        <details style={{ marginTop: 12 }}>
-          <summary className="muted" style={{ cursor: "pointer" }}>
-            Eventos pasados ({pasados.length})
-          </summary>
-          <div className="stack" style={{ gap: 8, marginTop: 8 }}>
-            {pasados.map((e) => (
-              <FilaEvento key={e.id} e={e} />
+      <div className="calendario-grid">
+        {DIAS_SEMANA_CORTOS.map((d) => (
+          <div key={d} className="calendario-dia-header">
+            {d}
+          </div>
+        ))}
+        {celdas.map((c) => {
+          const eventosCelda = eventosPorDia[c.key] || [];
+          const visibles = eventosCelda.slice(0, 3);
+          const restantes = eventosCelda.length - visibles.length;
+          return (
+            <div
+              key={c.key}
+              className={
+                "calendario-celda" +
+                (c.enMes ? "" : " calendario-celda-fuera") +
+                (c.esHoy ? " calendario-celda-hoy" : "") +
+                (c.key === diaSeleccionado ? " calendario-celda-seleccionada" : "")
+              }
+              onClick={() => setDiaSeleccionado(c.key)}
+            >
+              <div className="calendario-celda-numero">{c.dia}</div>
+              <div className="calendario-celda-eventos">
+                {visibles.map((e) => (
+                  <div
+                    key={e.id}
+                    className={"calendario-evento-pill evento-tipo-" + e.tipo}
+                    title={e.titulo}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      onEditar(e);
+                    }}
+                  >
+                    {e.hora ? e.hora.slice(0, 5) + " " : ""}
+                    {e.titulo}
+                  </div>
+                ))}
+                {restantes > 0 && <div className="calendario-evento-mas">+{restantes} más</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="panel">
+        <div className="toolbar" style={{ marginBottom: eventosDelDia.length ? 12 : 0 }}>
+          <div className="form-section-label" style={{ marginBottom: 0 }}>
+            {formatDiaLargo(diaSeleccionado)}
+          </div>
+          <button className="btn-secondary" onClick={() => onNuevo(diaSeleccionado)}>
+            <Plus size={15} /> Agregar aquí
+          </button>
+        </div>
+        {eventosDelDia.length === 0 ? (
+          <div className="empty">No hay eventos este día.</div>
+        ) : (
+          <div className="stack" style={{ gap: 8 }}>
+            {eventosDelDia.map((e) => (
+              <FilaEventoDia
+                key={e.id}
+                e={e}
+                onEditar={onEditar}
+                onEliminar={onEliminar}
+                onEliminarSerie={onEliminarSerie}
+                onConvocatoria={onConvocatoria}
+              />
             ))}
           </div>
-        </details>
-      )}
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FilaEventoDia({ e, onEditar, onEliminar, onEliminarSerie, onConvocatoria }) {
+  return (
+    <div className="panel evento-fila">
+      <div className="evento-fila-info">
+        <div className="evento-fila-titulo">
+          <span className={"evento-tipo-pill evento-tipo-" + e.tipo}>{tipoEventoLabel(e.tipo)}</span>
+          {e.titulo}
+          {e.serieId && (
+            <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
+              (se repite)
+            </span>
+          )}
+        </div>
+        <div className="muted" style={{ fontSize: 13 }}>
+          {[e.hora, (e.categorias || []).join(", "), e.lugar].filter(Boolean).join(" · ") || "Sin más detalles"}
+        </div>
+      </div>
+      <div className="evento-fila-acciones">
+        {e.tipo === "partido" && (
+          <button className="btn-secondary" onClick={() => onConvocatoria(e)}>
+            <MessageCircle size={15} /> Convocatoria
+          </button>
+        )}
+        <button className="icon-btn" onClick={() => onEditar(e)} aria-label="Editar">
+          <Pencil size={16} />
+        </button>
+        {e.serieId && onEliminarSerie && (
+          <button className="btn-secondary" onClick={() => onEliminarSerie(e)} title="Eliminar todas las repeticiones de este evento">
+            <Trash2 size={14} /> Serie
+          </button>
+        )}
+        {onEliminar && (
+          <button className="icon-btn danger" onClick={() => onEliminar(e)} aria-label="Eliminar">
+            <Trash2 size={16} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -3660,7 +3863,7 @@ function EventoModal({ initial, alumnos, onSave, onCancel, enviando }) {
     tipo: initial.tipo || "entrenamiento",
     fecha: initial.fecha || todayISO(),
     hora: initial.hora || "",
-    categoria: initial.categoria || "",
+    categorias: initial.categorias || [],
     horario: initial.horario || "",
     lugar: initial.lugar || "",
     rival: initial.rival || "",
@@ -3669,13 +3872,26 @@ function EventoModal({ initial, alumnos, onSave, onCancel, enviando }) {
     indicaciones: initial.indicaciones || "",
     notas: initial.notas || "",
     alumnosConvocados: initial.alumnosConvocados || [],
+    repetir: false,
+    frecuencia: "semanal",
+    hasta: "",
   });
   const [error, setError] = useState(null);
   const esPartido = form.tipo === "partido";
+  const esEdicion = Boolean(form.id);
 
-  const alumnosDeCategoria = form.categoria
-    ? alumnos.filter((a) => a.categoria === form.categoria && a.activo !== false)
+  const alumnosDeCategoria = form.categorias.length
+    ? alumnos.filter((a) => form.categorias.includes(a.categoria) && a.activo !== false)
     : alumnos.filter((a) => a.activo !== false);
+
+  function toggleCategoria(c) {
+    setForm((prev) => {
+      const set = new Set(prev.categorias);
+      if (set.has(c)) set.delete(c);
+      else set.add(c);
+      return { ...prev, categorias: Array.from(set) };
+    });
+  }
 
   function toggleConvocado(id) {
     setForm((prev) => {
@@ -3694,6 +3910,14 @@ function EventoModal({ initial, alumnos, onSave, onCancel, enviando }) {
     }
     if (!form.fecha) {
       setError("Elige una fecha.");
+      return;
+    }
+    if (form.repetir && form.frecuencia !== "ninguna" && !form.hasta) {
+      setError("Elige hasta qué fecha se debe repetir el evento.");
+      return;
+    }
+    if (form.repetir && form.hasta && form.hasta < form.fecha) {
+      setError("La fecha de \"repetir hasta\" no puede ser anterior a la fecha del evento.");
       return;
     }
     setError(null);
@@ -3732,17 +3956,20 @@ function EventoModal({ initial, alumnos, onSave, onCancel, enviando }) {
                 ))}
               </select>
             </label>
-            <label>
-              Categoría
-              <select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
-                <option value="">(todas / no aplica)</option>
-                {CATEGORIAS.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </label>
+          </div>
+          <div>
+            <div className="form-section-label">
+              Categorías {form.categorias.length > 0 && `(${form.categorias.length})`}
+              {form.categorias.length === 0 && <span className="muted"> — ninguna elegida = todas / no aplica</span>}
+            </div>
+            <div className="evento-convocados-lista">
+              {CATEGORIAS.map((c) => (
+                <label key={c} className="checkbox-item">
+                  <input type="checkbox" checked={form.categorias.includes(c)} onChange={() => toggleCategoria(c)} />
+                  {c}
+                </label>
+              ))}
+            </div>
           </div>
           <div className="form-row">
             <label>
@@ -3758,6 +3985,35 @@ function EventoModal({ initial, alumnos, onSave, onCancel, enviando }) {
             Lugar
             <input type="text" value={form.lugar} onChange={(e) => setForm({ ...form, lugar: e.target.value })} />
           </label>
+
+          {!esEdicion && (
+            <div>
+              <label className="checkbox-item">
+                <input
+                  type="checkbox"
+                  checked={form.repetir}
+                  onChange={(e) => setForm({ ...form, repetir: e.target.checked })}
+                />
+                Repetir este evento
+              </label>
+              {form.repetir && (
+                <div className="form-row" style={{ marginTop: 8 }}>
+                  <label>
+                    Frecuencia
+                    <select value={form.frecuencia} onChange={(e) => setForm({ ...form, frecuencia: e.target.value })}>
+                      <option value="semanal">Cada semana</option>
+                      <option value="quincenal">Cada quince días</option>
+                      <option value="mensual">Cada mes</option>
+                    </select>
+                  </label>
+                  <label>
+                    Repetir hasta
+                    <input type="date" value={form.hasta} onChange={(e) => setForm({ ...form, hasta: e.target.value })} />
+                  </label>
+                </div>
+              )}
+            </div>
+          )}
 
           {esPartido && (
             <>
@@ -3790,7 +4046,9 @@ function EventoModal({ initial, alumnos, onSave, onCancel, enviando }) {
               <div>
                 <div className="form-section-label">
                   Convocados ({form.alumnosConvocados.length})
-                  {!form.categoria && <span className="muted"> — elige una categoría para filtrar la lista</span>}
+                  {form.categorias.length === 0 && (
+                    <span className="muted"> — elige una o más categorías para filtrar la lista</span>
+                  )}
                 </div>
                 <div className="evento-convocados-lista">
                   {alumnosDeCategoria.length === 0 ? (
@@ -5082,6 +5340,36 @@ function Styles() {
       .evento-tipo-torneo { background: #FBEAE9; color: #C13F3B; }
       .evento-tipo-entrenamiento { background: #E7F7F1; color: #158F63; }
       .evento-tipo-suspension { background: #F1EAFB; color: #6B3FC1; }
+
+      .calendario-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+      .calendario-nav { display: flex; align-items: center; gap: 4px; }
+      .calendario-mes-label { font-size: 17px; font-weight: 700; color: var(--charcoal); min-width: 160px; text-align: center; text-transform: capitalize; }
+      .calendario-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+      .calendario-dia-header { text-align: center; font-size: 11px; font-weight: 700; text-transform: uppercase; color: #8A8D90; padding: 4px 0; }
+      .calendario-celda {
+        min-height: 90px; background: #fff; border: 1px solid var(--border-soft); border-radius: 10px;
+        padding: 6px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; transition: border-color 0.15s ease, background 0.15s ease;
+      }
+      .calendario-celda:hover { border-color: #BEE9FA; }
+      .calendario-celda-fuera { background: #FAFBFB; color: #B7BCBF; }
+      .calendario-celda-fuera .calendario-celda-numero { color: #C4C9CC; }
+      .calendario-celda-hoy { border-color: var(--blue, #00B6F1); }
+      .calendario-celda-seleccionada { background: #E7F7FD; border-color: var(--blue, #00B6F1); }
+      .calendario-celda-numero { font-size: 12.5px; font-weight: 700; color: var(--charcoal); }
+      .calendario-celda-eventos { display: flex; flex-direction: column; gap: 3px; }
+      .calendario-evento-pill {
+        font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 6px; background: #E7F7FD; color: #0090C2;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .calendario-evento-pill.evento-tipo-partido, .calendario-evento-pill.evento-tipo-torneo { background: #FBEAE9; color: #C13F3B; }
+      .calendario-evento-pill.evento-tipo-entrenamiento { background: #E7F7F1; color: #158F63; }
+      .calendario-evento-pill.evento-tipo-suspension { background: #F1EAFB; color: #6B3FC1; }
+      .calendario-evento-mas { font-size: 10.5px; color: #8A8D90; padding: 0 4px; }
+      @media (max-width: 720px) {
+        .calendario-celda { min-height: 60px; }
+        .calendario-mes-label { min-width: 0; font-size: 15px; }
+        .calendario-evento-pill { font-size: 10px; }
+      }
 
       .badge { padding: 3px 10px; border-radius: var(--radius-pill); font-weight: 600; font-size: 12.5px; white-space: nowrap; }
       .pill-toggle {
