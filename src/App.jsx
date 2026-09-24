@@ -508,6 +508,10 @@ export default function App() {
     return <PanelAsistente perfil={perfil} onLogout={cerrarSesion} />;
   }
 
+  if (perfil.rol === "administrativo") {
+    return <PanelAdministrativo perfil={perfil} onLogout={cerrarSesion} />;
+  }
+
   return <PanelAdmin perfil={perfil} onLogout={cerrarSesion} />;
 }
 
@@ -895,6 +899,328 @@ function PanelAsistente({ perfil, onLogout }) {
       {toast && (
         <div className={"toast" + (toast.isError ? " toast-error" : "")}>{toast.msg}</div>
       )}
+    </div>
+  );
+}
+
+// Panel para el rol "administrativo" (ej. la persona que atiende leads,
+// registra alumnos y cobra el día a día, sin manejar decisiones
+// financieras). Reutiliza los mismos componentes que PanelAdmin (CRM,
+// Alumnos, Registrar pago) pero con menos pestañas — y lo que no le toca
+// (gastos, cobro mensual, corregir saldo, margen, editar/anular pagos,
+// eliminar alumnos) está bloqueado también a nivel de base de datos
+// (ver supabase-schema.sql), no solo escondido aquí en la pantalla.
+function PanelAdministrativo({ perfil, onLogout }) {
+  const [loading, setLoading] = useState(true);
+  const [alumnos, setAlumnos] = useState([]);
+  const [pagos, setPagos] = useState([]);
+  const [leads, setLeads] = useState([]);
+  const [tab, setTab] = useState("crm");
+  const [toast, setToast] = useState(null);
+  const [busqueda, setBusqueda] = useState("");
+
+  const enviandoRef = React.useRef(false);
+  const [enviando, setEnviando] = useState(false);
+  function iniciarEnvio() {
+    if (enviandoRef.current) return false;
+    enviandoRef.current = true;
+    setEnviando(true);
+    return true;
+  }
+  function terminarEnvio() {
+    enviandoRef.current = false;
+    setEnviando(false);
+  }
+
+  function showToast(msg, isError) {
+    setToast({ msg, isError: !!isError });
+    setTimeout(() => setToast(null), 2600);
+  }
+
+  const [alumnoModal, setAlumnoModal] = useState(null); // null | {} (nuevo) | alumno (editar)
+  const [pagoForm, setPagoForm] = useState({
+    alumnoId: "",
+    monto: "",
+    metodo: "Efectivo",
+    fecha: todayISO(),
+    nota: "",
+  });
+  const [leadModal, setLeadModal] = useState(null);
+  const [confirmConvertirLead, setConfirmConvertirLead] = useState(null);
+
+  async function cargarDatos({ silent } = {}) {
+    const [a, p, l] = await Promise.all([
+      supabase.from("alumnos").select("*").order("nombre"),
+      supabase.from("pagos").select("*").order("created_at", { ascending: false }),
+      supabase.from("leads").select("*").order("created_at", { ascending: false }),
+    ]);
+    setAlumnos((a.data || []).map(alumnoFromDb));
+    setPagos((p.data || []).map(pagoFromDb));
+    setLeads((l.data || []).map(leadFromDb));
+    if (!silent && !a.error && !p.error && !l.error) {
+      showToast(`Datos actualizados: ${(a.data || []).length} alumnos, ${(l.data || []).length} leads.`);
+    }
+  }
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      await cargarDatos({ silent: true });
+      setLoading(false);
+    })();
+    const canal = supabase
+      .channel("atletic-cambios-administrativo")
+      .on("postgres_changes", { event: "*", schema: "public", table: "alumnos" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "pagos" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => cargarDatos({ silent: true }))
+      .subscribe();
+    return () => {
+      supabase.removeChannel(canal);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const currentMonthKey = monthKeyOf(todayISO());
+  const alumnosActivos = alumnos.filter((a) => a.activo !== false);
+  const alumnosFiltrados = alumnos.filter((a) => {
+    const q = busqueda.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      a.nombre.toLowerCase().includes(q) ||
+      (a.encargado || "").toLowerCase().includes(q) ||
+      (a.categoria || "").toLowerCase().includes(q)
+    );
+  });
+
+  const leadsDelMes = leads.filter((l) => monthKeyOf((l.createdAt || "").slice(0, 10)) === currentMonthKey);
+  const tasaConversionLeads =
+    leadsDelMes.length === 0
+      ? 0
+      : Math.round((leadsDelMes.filter((l) => l.estado === "inscrito").length / leadsDelMes.length) * 100);
+  const leadsSinSeguimiento = leads.filter((l) => l.estado === "nuevo" && (diasDesde(l.createdAt) || 0) > 3);
+
+  function alumnoNombre(id) {
+    const a = alumnos.find((x) => x.id === id);
+    return a ? a.nombre : "(alumno eliminado)";
+  }
+
+  async function guardarAlumno(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = alumnoToDb(data);
+      let error;
+      if (data.id) {
+        ({ error } = await supabase.from("alumnos").update(payload).eq("id", data.id));
+      } else {
+        ({ error } = await supabase.from("alumnos").insert(payload));
+      }
+      if (!error) {
+        await cargarDatos({ silent: true });
+        setAlumnoModal(null);
+        showToast(esNuevo ? "Alumno agregado." : "Alumno actualizado.");
+      } else {
+        showToast("No se pudo guardar (revisa tu conexión). Vuelve a intentarlo, tus datos siguen en el formulario.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  function noAutorizado() {
+    showToast("No tienes permiso para eso. Pídele a un administrador.", true);
+  }
+
+  async function registrarPago(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!iniciarEnvio()) return;
+    try {
+      const monto = parseMonto(pagoForm.monto);
+      if (!pagoForm.alumnoId || isNaN(monto) || monto <= 0) {
+        showToast("Selecciona un alumno e ingresa un monto válido.", true);
+        return;
+      }
+      const { error } = await supabase.rpc("registrar_pago", {
+        p_alumno_id: pagoForm.alumnoId,
+        p_monto: monto,
+        p_metodo: pagoForm.metodo,
+        p_fecha: pagoForm.fecha,
+        p_nota: pagoForm.nota || null,
+      });
+      if (!error) {
+        await cargarDatos({ silent: true });
+        setPagoForm({ alumnoId: "", monto: "", metodo: "Efectivo", fecha: todayISO(), nota: "" });
+        showToast("Pago registrado.");
+      } else {
+        showToast("No se pudo guardar el pago (revisa tu conexión). No se perdió lo que escribiste — dale clic de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function cambiarEstadoLead(leadId, estado) {
+    const { error } = await supabase.from("leads").update({ estado }).eq("id", leadId);
+    if (!error) {
+      await cargarDatos({ silent: true });
+    } else {
+      showToast("No se pudo mover el lead (revisa tu conexión). Inténtalo de nuevo.", true);
+    }
+  }
+
+  async function guardarNotasLead(leadId, notas) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("leads").update({ notas_internas: notas || null }).eq("id", leadId);
+      if (!error) {
+        await cargarDatos({ silent: true });
+        showToast("Notas guardadas.");
+      } else {
+        showToast("No se pudieron guardar las notas (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function convertirLead(lead, { categoria, horario, tarifaMensual }) {
+    if (!iniciarEnvio()) return false;
+    try {
+      const { error } = await supabase.rpc("convertir_lead_a_alumno", {
+        p_lead_id: lead.id,
+        p_tarifa_mensual: tarifaMensual,
+        p_categoria: categoria,
+        p_horario: horario,
+      });
+      if (!error) {
+        await cargarDatos({ silent: true });
+        showToast(`${lead.nombreAlumno} se agregó como alumno.`);
+        return true;
+      } else {
+        showToast("No se pudo convertir el lead (revisa tu conexión). Inténtalo de nuevo.", true);
+        return false;
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  return (
+    <div className="app-root">
+      <Styles />
+      <header className="topbar">
+        <div className="brand">
+          <LogoMark />
+          <div>
+            <div className="brand-name">Atletic Guatemala</div>
+            <div className="brand-sub">Administrativo</div>
+          </div>
+        </div>
+        <button className="reload-btn" onClick={onLogout} title="Cerrar sesión">
+          <LogOut size={14} />
+          {perfil?.nombre ? perfil.nombre : "Salir"}
+        </button>
+      </header>
+
+      <nav className="tabs">
+        {[
+          { key: "crm", label: "CRM" },
+          { key: "alumnos", label: "Alumnos" },
+          { key: "pago", label: "Registrar pago" },
+        ].map((t) => (
+          <button
+            key={t.key}
+            className={"tab" + (tab === t.key ? " active" : "")}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
+
+      <main className="content">
+        {loading ? (
+          <div className="empty">Cargando información…</div>
+        ) : (
+          <>
+            {tab === "crm" && (
+              <CrmView
+                leads={leads}
+                leadsDelMesCount={leadsDelMes.length}
+                tasaConversionLeads={tasaConversionLeads}
+                leadsSinSeguimientoCount={leadsSinSeguimiento.length}
+                monthLabelStr={monthLabel(currentMonthKey)}
+                onCambiarEstado={cambiarEstadoLead}
+                onAbrirLead={(l) => setLeadModal(l)}
+              />
+            )}
+
+            {tab === "alumnos" && (
+              <AlumnosView
+                alumnos={alumnosFiltrados}
+                busqueda={busqueda}
+                setBusqueda={setBusqueda}
+                onNuevo={() => setAlumnoModal({})}
+                onEditar={(a) => setAlumnoModal(a)}
+                onEliminar={noAutorizado}
+                onEliminarVarios={noAutorizado}
+                onCorregirSaldo={noAutorizado}
+              />
+            )}
+
+            {tab === "pago" && (
+              <PagoView
+                alumnosActivos={alumnosActivos}
+                pagoForm={pagoForm}
+                setPagoForm={setPagoForm}
+                onSubmit={registrarPago}
+                pagosRecientes={pagos.slice(0, 10)}
+                alumnoNombre={alumnoNombre}
+                onAnular={noAutorizado}
+                onEditar={noAutorizado}
+                enviando={enviando}
+              />
+            )}
+          </>
+        )}
+      </main>
+
+      {alumnoModal !== null && (
+        <AlumnoModal
+          initial={alumnoModal}
+          onSave={guardarAlumno}
+          onCancel={() => setAlumnoModal(null)}
+          enviando={enviando}
+          showToast={showToast}
+        />
+      )}
+
+      {leadModal && (
+        <LeadDetalleModal
+          lead={leadModal}
+          onCerrar={() => setLeadModal(null)}
+          onGuardarNotas={guardarNotasLead}
+          onConvertir={() => setConfirmConvertirLead(leadModal)}
+          enviando={enviando}
+        />
+      )}
+
+      {confirmConvertirLead && (
+        <ConvertirLeadModal
+          lead={confirmConvertirLead}
+          onConfirmar={async (datos) => {
+            const ok = await convertirLead(confirmConvertirLead, datos);
+            if (ok) {
+              setConfirmConvertirLead(null);
+              setLeadModal(null);
+            }
+          }}
+          onCancelar={() => setConfirmConvertirLead(null)}
+          enviando={enviando}
+        />
+      )}
+
+      {toast && <div className={"toast" + (toast.isError ? " toast-error" : "")}>{toast.msg}</div>}
     </div>
   );
 }
