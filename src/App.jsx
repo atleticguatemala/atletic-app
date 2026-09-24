@@ -915,9 +915,14 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [alumnos, setAlumnos] = useState([]);
   const [pagos, setPagos] = useState([]);
   const [leads, setLeads] = useState([]);
+  const [cargos, setCargos] = useState([]);
+  const [asistencias, setAsistencias] = useState([]);
   const [tab, setTab] = useState("crm");
   const [toast, setToast] = useState(null);
   const [busqueda, setBusqueda] = useState("");
+  const [marcandoIds, setMarcandoIds] = useState(() => new Set());
+  const [mesCobroSeleccionado, setMesCobroSeleccionado] = useState(monthKeyOf(todayISO()));
+  const [confirmCargo, setConfirmCargo] = useState(false);
 
   const enviandoRef = React.useRef(false);
   const [enviando, setEnviando] = useState(false);
@@ -949,14 +954,18 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [confirmConvertirLead, setConfirmConvertirLead] = useState(null);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, l] = await Promise.all([
+    const [a, p, l, c, s] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("leads").select("*").order("created_at", { ascending: false }),
+      supabase.from("cargos").select("*").order("created_at", { ascending: false }),
+      supabase.from("asistencias").select("*").order("fecha", { ascending: false }),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
     setLeads((l.data || []).map(leadFromDb));
+    setCargos((c.data || []).map(cargoFromDb));
+    setAsistencias((s.data || []).map(asistenciaFromDb));
     if (!silent && !a.error && !p.error && !l.error) {
       showToast(`Datos actualizados: ${(a.data || []).length} alumnos, ${(l.data || []).length} leads.`);
     }
@@ -973,6 +982,8 @@ function PanelAdministrativo({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "alumnos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "pagos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "cargos" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "asistencias" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -982,6 +993,18 @@ function PanelAdministrativo({ perfil, onLogout }) {
 
   const currentMonthKey = monthKeyOf(todayISO());
   const alumnosActivos = alumnos.filter((a) => a.activo !== false);
+  const becadosActivosCount = alumnosActivos.filter((a) => a.becado).length;
+  const pendientesGenerar = alumnosActivos.filter(
+    (a) => !a.becado && a.ultimoMesCobrado !== mesCobroSeleccionado
+  );
+  const mesesCobroDisponibles = (() => {
+    const [anioActual, mesActual] = monthKeyOf(todayISO()).split("-").map(Number);
+    const meses = [];
+    for (let m = mesActual; m <= 12; m++) {
+      meses.push(`${anioActual}-${String(m).padStart(2, "0")}`);
+    }
+    return meses;
+  })();
   const alumnosFiltrados = alumnos.filter((a) => {
     const q = busqueda.trim().toLowerCase();
     if (!q) return true;
@@ -1059,6 +1082,53 @@ function PanelAdministrativo({ perfil, onLogout }) {
     }
   }
 
+  async function generarCobroMensual() {
+    const afectados = pendientesGenerar;
+    if (afectados.length === 0) {
+      setConfirmCargo(false);
+      return;
+    }
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.rpc("generar_cobro_mensual", {
+        p_mes: mesCobroSeleccionado,
+        p_alumno_ids: afectados.map((a) => a.id),
+      });
+      setConfirmCargo(false);
+      if (!error) {
+        await cargarDatos({ silent: true });
+        showToast(`Cobro de ${monthLabel(mesCobroSeleccionado)} generado para ${afectados.length} alumno(s).`);
+      } else {
+        showToast("No se pudo generar el cobro (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function marcarAsistencia(alumnoId, fecha, presente) {
+    if (marcandoIds.has(alumnoId)) return;
+    setMarcandoIds((prev) => new Set(prev).add(alumnoId));
+    try {
+      const { error } = await supabase.rpc("marcar_asistencia", {
+        p_alumno_id: alumnoId,
+        p_fecha: fecha,
+        p_presente: presente,
+      });
+      if (!error) {
+        await cargarDatos({ silent: true });
+      } else {
+        showToast("No se pudo guardar la asistencia (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      setMarcandoIds((prev) => {
+        const next = new Set(prev);
+        next.delete(alumnoId);
+        return next;
+      });
+    }
+  }
+
   async function cambiarEstadoLead(leadId, estado) {
     const { error } = await supabase.from("leads").update({ estado }).eq("id", leadId);
     if (!error) {
@@ -1127,6 +1197,8 @@ function PanelAdministrativo({ perfil, onLogout }) {
           { key: "crm", label: "CRM" },
           { key: "alumnos", label: "Alumnos" },
           { key: "pago", label: "Registrar pago" },
+          { key: "cobro", label: "Cobro mensual" },
+          { key: "asistencia", label: "Asistencia" },
         ].map((t) => (
           <button
             key={t.key}
@@ -1181,9 +1253,50 @@ function PanelAdministrativo({ perfil, onLogout }) {
                 enviando={enviando}
               />
             )}
+
+            {tab === "cobro" && (
+              <CobroView
+                monthLabelStr={monthLabel(mesCobroSeleccionado)}
+                mesesDisponibles={mesesCobroDisponibles}
+                mesSeleccionado={mesCobroSeleccionado}
+                onCambiarMes={setMesCobroSeleccionado}
+                pendientesGenerar={pendientesGenerar}
+                cargos={cargos}
+                onGenerar={() => setConfirmCargo(true)}
+              />
+            )}
+
+            {tab === "asistencia" && (
+              <AsistenciaView
+                alumnosActivos={alumnosActivos}
+                asistencias={asistencias}
+                onMarcar={marcarAsistencia}
+                marcandoIds={marcandoIds}
+              />
+            )}
           </>
         )}
       </main>
+
+      {confirmCargo && (
+        <ConfirmDialog
+          title={`Generar cobro de ${monthLabel(mesCobroSeleccionado)}`}
+          body={
+            (pendientesGenerar.length === 0
+              ? "Todos los alumnos activos que no están becados ya tienen el cobro de ese mes generado."
+              : `Se sumará la tarifa mensual al saldo de ${pendientesGenerar.length} alumno(s) activo(s), por un total de ${formatQ(
+                  pendientesGenerar.reduce((s, a) => s + Number(a.tarifaMensual || 0), 0)
+                )}.`) +
+            (becadosActivosCount > 0
+              ? ` No se cobra a ${becadosActivosCount} alumno(s) becado(s).`
+              : "")
+          }
+          confirmLabel={pendientesGenerar.length === 0 ? "Entendido" : "Generar cobro"}
+          onConfirm={generarCobroMensual}
+          onCancel={() => setConfirmCargo(false)}
+          disabled={enviando}
+        />
+      )}
 
       {alumnoModal !== null && (
         <AlumnoModal
