@@ -19,6 +19,8 @@ import {
   ClipboardCheck,
   Lock,
   FileDown,
+  User,
+  Camera,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -94,6 +96,14 @@ function alumnoFromDb(r) {
     ultimoMesCobrado: r.ultimo_mes_cobrado,
     activo: r.activo,
     fechaAlta: r.fecha_alta,
+    fechaNacimiento: r.fecha_nacimiento,
+    colegio: r.colegio,
+    contactoEmergenciaNombre: r.contacto_emergencia_nombre,
+    contactoEmergenciaTelefono: r.contacto_emergencia_telefono,
+    posicion: r.posicion,
+    posicionSecundaria: r.posicion_secundaria,
+    piernaDominante: r.pierna_dominante,
+    fotoUrl: r.foto_url,
   };
 }
 function alumnoToDb(a) {
@@ -109,7 +119,31 @@ function alumnoToDb(a) {
     estado,
     becado,
     activo,
+    fecha_nacimiento: a.fechaNacimiento || null,
+    colegio: a.colegio || null,
+    contacto_emergencia_nombre: a.contactoEmergenciaNombre || null,
+    contacto_emergencia_telefono: a.contactoEmergenciaTelefono || null,
+    posicion: a.posicion || null,
+    posicion_secundaria: a.posicionSecundaria || null,
+    pierna_dominante: a.piernaDominante || null,
+    foto_url: a.fotoUrl || null,
   };
+}
+
+// Calcula la edad en años a partir de una fecha de nacimiento (YYYY-MM-DD).
+// Devuelve null si no hay fecha (el alumno todavía no la tiene registrada),
+// para que la pantalla sepa que no hay nada que mostrar en vez de un "0".
+function calcularEdad(fechaNacimientoISO) {
+  if (!fechaNacimientoISO) return null;
+  const nacimiento = new Date(fechaNacimientoISO + "T00:00:00");
+  if (isNaN(nacimiento.getTime())) return null;
+  const hoy = new Date();
+  let edad = hoy.getFullYear() - nacimiento.getFullYear();
+  const aunNoCumple =
+    hoy.getMonth() < nacimiento.getMonth() ||
+    (hoy.getMonth() === nacimiento.getMonth() && hoy.getDate() < nacimiento.getDate());
+  if (aunNoCumple) edad -= 1;
+  return edad;
 }
 
 function pagoFromDb(r) {
@@ -148,6 +182,121 @@ function historialTarifaFromDb(r) {
     tarifaNueva: Number(r.tarifa_nueva) || 0,
     fecha: r.fecha,
   };
+}
+
+// Lead del formulario público de inscripción (CRM). Igual que los demás
+// mappers, solo traduce nombres de columna — no hay lógica de negocio acá.
+function leadFromDb(r) {
+  return {
+    id: r.id,
+    nombreAlumno: r.nombre_alumno,
+    fechaNacimiento: r.fecha_nacimiento,
+    genero: r.genero,
+    posicion: r.posicion,
+    programas: r.programas || [],
+    tallaUniforme: r.talla_uniforme,
+    nombrePadre: r.nombre_padre,
+    fechaNacimientoPadre: r.fecha_nacimiento_padre,
+    telefonoPadre: r.telefono_padre,
+    correoPadre: r.correo_padre,
+    nombreMadre: r.nombre_madre,
+    fechaNacimientoMadre: r.fecha_nacimiento_madre,
+    telefonoMadre: r.telefono_madre,
+    correoMadre: r.correo_madre,
+    alergias: r.alergias,
+    condicionesMedicas: r.condiciones_medicas,
+    medicamentos: r.medicamentos,
+    tieneSeguro: r.tiene_seguro,
+    seguroInfo: r.seguro_info,
+    interesadoSeguro: r.interesado_seguro,
+    aceptoTerminos: !!r.acepto_terminos,
+    comentarios: r.comentarios,
+    estado: r.estado || "nuevo",
+    fechaPrueba: r.fecha_prueba,
+    notasInternas: r.notas_internas,
+    fuente: r.fuente,
+    alumnoId: r.alumno_id,
+    createdAt: r.created_at,
+  };
+}
+
+function leadToDb(l) {
+  return {
+    nombre_alumno: l.nombreAlumno,
+    fecha_nacimiento: l.fechaNacimiento || null,
+    genero: l.genero || null,
+    posicion: l.posicion || null,
+    programas: l.programas && l.programas.length ? l.programas : null,
+    talla_uniforme: l.tallaUniforme || null,
+    nombre_padre: l.nombrePadre || null,
+    fecha_nacimiento_padre: l.fechaNacimientoPadre || null,
+    telefono_padre: l.telefonoPadre || null,
+    correo_padre: l.correoPadre || null,
+    nombre_madre: l.nombreMadre || null,
+    fecha_nacimiento_madre: l.fechaNacimientoMadre || null,
+    telefono_madre: l.telefonoMadre || null,
+    correo_madre: l.correoMadre || null,
+    alergias: l.alergias || null,
+    condiciones_medicas: l.condicionesMedicas || null,
+    medicamentos: l.medicamentos || null,
+    tiene_seguro: l.tieneSeguro === undefined ? null : l.tieneSeguro,
+    seguro_info: l.seguroInfo || null,
+    interesado_seguro: l.interesadoSeguro === undefined ? null : l.interesadoSeguro,
+    acepto_terminos: !!l.aceptoTerminos,
+    comentarios: l.comentarios || null,
+    estado: l.estado || "nuevo",
+    fecha_prueba: l.fechaPrueba || null,
+    notas_internas: l.notasInternas || null,
+    fuente: l.fuente || "sitio web",
+  };
+}
+
+// Columnas del pipeline de leads, en el orden fijo que pidió el dueño.
+const ESTADOS_LEAD = [
+  { value: "nuevo", label: "Nuevo" },
+  { value: "contactado", label: "Contactado" },
+  { value: "prueba_programada", label: "Prueba programada" },
+  { value: "asistio", label: "Asistió" },
+  { value: "inscrito", label: "Inscrito" },
+  { value: "no_inscrito", label: "No inscrito" },
+];
+
+function estadoLeadInfo(estado) {
+  switch (estado) {
+    case "contactado":
+      return { label: "Contactado", color: "#0090C2", bg: "#E7F7FD" };
+    case "prueba_programada":
+      return { label: "Prueba programada", color: "#B4790A", bg: "#FCF1DD" };
+    case "asistio":
+      return { label: "Asistió", color: "#6C4FB6", bg: "#F0EBFB" };
+    case "inscrito":
+      return { label: "Inscrito", color: "#158F63", bg: "#E7F7F1" };
+    case "no_inscrito":
+      return { label: "No inscrito", color: "#8A8D90", bg: "#F0F2F3" };
+    case "nuevo":
+    default:
+      return { label: "Nuevo", color: "#C13F3B", bg: "#FBEAE9" };
+  }
+}
+
+// Teléfono de contacto de un lead: prefiere el del padre, si no el de la
+// madre — mismo criterio que usa convertir_lead_a_alumno del lado del SQL.
+function telefonoContactoLead(lead) {
+  return lead.telefonoPadre || lead.telefonoMadre || "";
+}
+
+function nombreContactoLead(lead) {
+  return lead.nombrePadre || lead.nombreMadre || "";
+}
+
+// Días desde que el lead se creó (no hay columna de "última actualización"
+// de etapa todavía, así que se usa created_at como pidió la especificación).
+function diasDesde(fechaISO) {
+  if (!fechaISO) return null;
+  const inicio = new Date(fechaISO);
+  if (isNaN(inicio.getTime())) return null;
+  const ms = Date.now() - inicio.getTime();
+  return Math.max(0, Math.floor(ms / (1000 * 60 * 60 * 24)));
 }
 
 const ESTADOS_ALUMNO = [
@@ -201,6 +350,21 @@ const HORARIOS = [
 ];
 
 const METODOS_PAGO = ["Efectivo", "Depósito BI", "Depósito OB", "Transferencia", "Otro"];
+
+const POSICIONES = [
+  "Portero",
+  "Defensa central",
+  "Lateral derecho",
+  "Lateral izquierdo",
+  "Mediocampista defensivo",
+  "Mediocampista central",
+  "Mediocampista ofensivo",
+  "Extremo derecho",
+  "Extremo izquierdo",
+  "Delantero",
+];
+
+const PIERNA_DOMINANTE = ["Derecha", "Izquierda", "Ambas"];
 
 const CATEGORIAS_GASTO = ["Cancha", "Pago a entrenador", "Equipo y material", "Publicidad", "Otro"];
 
@@ -747,6 +911,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [gastos, setGastos] = useState([]);
   const [ajustes, setAjustes] = useState([]);
   const [asistencias, setAsistencias] = useState([]);
+  const [leads, setLeads] = useState([]);
   const [tab, setTab] = useState("resumen");
   const [toast, setToast] = useState(null);
 
@@ -797,13 +962,14 @@ function PanelAdmin({ perfil, onLogout }) {
   const [reloading, setReloading] = useState(false);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, c, g, j, s] = await Promise.all([
+    const [a, p, c, g, j, s, l] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("cargos").select("*").order("created_at", { ascending: false }),
       supabase.from("gastos").select("*").order("created_at", { ascending: false }),
       supabase.from("ajustes").select("*").order("created_at", { ascending: false }),
       supabase.from("asistencias").select("*").order("fecha", { ascending: false }),
+      supabase.from("leads").select("*").order("created_at", { ascending: false }),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -811,8 +977,9 @@ function PanelAdmin({ perfil, onLogout }) {
     setGastos((g.data || []).map(gastoFromDb));
     setAjustes((j.data || []).map(ajusteFromDb));
     setAsistencias((s.data || []).map(asistenciaFromDb));
+    setLeads((l.data || []).map(leadFromDb));
 
-    const algunFallo = [a, p, c, g, j, s].some((r) => r.error);
+    const algunFallo = [a, p, c, g, j, s, l].some((r) => r.error);
     if (algunFallo) {
       showToast(
         "No se pudo cargar toda tu información (revisa tu conexión). Dale a \"Recargar\" para intentar de nuevo.",
@@ -835,6 +1002,7 @@ function PanelAdmin({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "cargos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "ajustes" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "asistencias" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -1122,6 +1290,59 @@ function PanelAdmin({ perfil, onLogout }) {
     }
   }
 
+  // Mueve un lead a otra etapa del pipeline (el <select> de la tarjeta).
+  // Simple update directo a la tabla — está permitido por RLS solo para
+  // admin (ver "solo admin leads" en supabase-schema.sql).
+  async function cambiarEstadoLead(leadId, estado) {
+    const { error } = await supabase.from("leads").update({ estado }).eq("id", leadId);
+    if (!error) {
+      await cargarDatos({ silent: true });
+    } else {
+      showToast("No se pudo mover el lead (revisa tu conexión). Inténtalo de nuevo.", true);
+    }
+  }
+
+  // Guarda las notas internas del lead (privadas, solo las ve el staff).
+  async function guardarNotasLead(leadId, notas) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("leads").update({ notas_internas: notas || null }).eq("id", leadId);
+      if (!error) {
+        await cargarDatos({ silent: true });
+        showToast("Notas guardadas.");
+      } else {
+        showToast("No se pudieron guardar las notas (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  // Convierte un lead en alumno: crea el alumno Y marca el lead como
+  // inscrito en una sola operación en la base de datos (ver
+  // convertir_lead_a_alumno en supabase-schema.sql), con la categoría,
+  // horario y tarifa que el admin eligió en el paso de confirmación.
+  async function convertirLead(lead, { categoria, horario, tarifaMensual }) {
+    if (!iniciarEnvio()) return false;
+    try {
+      const { error } = await supabase.rpc("convertir_lead_a_alumno", {
+        p_lead_id: lead.id,
+        p_tarifa_mensual: tarifaMensual,
+        p_categoria: categoria,
+        p_horario: horario,
+      });
+      if (!error) {
+        await cargarDatos({ silent: true });
+        showToast(`${lead.nombreAlumno} se agregó como alumno.`);
+      } else {
+        showToast("No se pudo convertir el lead (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+      return !error;
+    } finally {
+      terminarEnvio();
+    }
+  }
+
   async function registrarGasto(e) {
     if (e && e.preventDefault) e.preventDefault();
     if (!iniciarEnvio()) return;
@@ -1320,6 +1541,26 @@ function PanelAdmin({ perfil, onLogout }) {
       }));
   }, [asistencias]);
 
+  // KPIs del CRM: leads del mes en curso, tasa de conversión de ese mismo
+  // período, y cuántos siguen "nuevo" sin que nadie los haya contactado en
+  // más de 3 días (para que no se enfríen).
+  const leadsDelMes = useMemo(
+    () => leads.filter((l) => monthKeyOf((l.createdAt || "").slice(0, 10)) === currentMonthKey),
+    [leads, currentMonthKey]
+  );
+  const tasaConversionLeads = useMemo(() => {
+    if (leadsDelMes.length === 0) return 0;
+    const inscritos = leadsDelMes.filter((l) => l.estado === "inscrito").length;
+    return Math.round((inscritos / leadsDelMes.length) * 100);
+  }, [leadsDelMes]);
+  const leadsSinSeguimiento = useMemo(
+    () => leads.filter((l) => l.estado === "nuevo" && (diasDesde(l.createdAt) || 0) > 3),
+    [leads]
+  );
+
+  const [leadModal, setLeadModal] = useState(null); // lead abierto en el detalle, o null
+  const [confirmConvertirLead, setConfirmConvertirLead] = useState(null); // lead a convertir, o null
+
   return (
     <div className="app-root">
       <Styles />
@@ -1362,6 +1603,7 @@ function PanelAdmin({ perfil, onLogout }) {
           { key: "cobro", label: "Cobro mensual" },
           { key: "asistencia", label: "Asistencia" },
           { key: "margen", label: "Margen" },
+          { key: "crm", label: "CRM" },
         ].map((t) => (
           <button
             key={t.key}
@@ -1467,6 +1709,18 @@ function PanelAdmin({ perfil, onLogout }) {
             {tab === "margen" && (
               <MargenView alumnosActivos={alumnosActivos} totalGastosMes={totalGastosMes} monthLabelStr={monthLabel(currentMonthKey)} />
             )}
+
+            {tab === "crm" && (
+              <CrmView
+                leads={leads}
+                leadsDelMesCount={leadsDelMes.length}
+                tasaConversionLeads={tasaConversionLeads}
+                leadsSinSeguimientoCount={leadsSinSeguimiento.length}
+                monthLabelStr={monthLabel(currentMonthKey)}
+                onCambiarEstado={cambiarEstadoLead}
+                onAbrirLead={(l) => setLeadModal(l)}
+              />
+            )}
           </>
         )}
       </main>
@@ -1477,6 +1731,7 @@ function PanelAdmin({ perfil, onLogout }) {
           onSave={guardarAlumno}
           onCancel={() => setAlumnoModal(null)}
           enviando={enviando}
+          showToast={showToast}
         />
       )}
 
@@ -1495,6 +1750,31 @@ function PanelAdmin({ perfil, onLogout }) {
           alumnoNombre={alumnoNombre}
           onGuardar={guardarEdicionPago}
           onCancel={() => setEditarPagoModal(null)}
+          enviando={enviando}
+        />
+      )}
+
+      {leadModal && (
+        <LeadDetalleModal
+          lead={leadModal}
+          onCerrar={() => setLeadModal(null)}
+          onGuardarNotas={guardarNotasLead}
+          onConvertir={() => setConfirmConvertirLead(leadModal)}
+          enviando={enviando}
+        />
+      )}
+
+      {confirmConvertirLead && (
+        <ConvertirLeadModal
+          lead={confirmConvertirLead}
+          onConfirmar={async (datos) => {
+            const ok = await convertirLead(confirmConvertirLead, datos);
+            if (ok) {
+              setConfirmConvertirLead(null);
+              setLeadModal(null);
+            }
+          }}
+          onCancelar={() => setConfirmConvertirLead(null)}
           enviando={enviando}
         />
       )}
@@ -1807,6 +2087,27 @@ function ResumenView({
   );
 }
 
+// Avatar circular del alumno: su foto si tiene, o si no un círculo con sus
+// iniciales (o el ícono genérico de persona si ni nombre hay todavía).
+function AvatarAlumno({ nombre, fotoUrl, size = 30 }) {
+  const iniciales = (nombre || "")
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p[0])
+    .join("")
+    .toUpperCase();
+  const estilo = { width: size, height: size, fontSize: Math.max(10, size * 0.38) };
+  if (fotoUrl) {
+    return <img src={fotoUrl} alt="" className="avatar-alumno" style={estilo} />;
+  }
+  return (
+    <div className="avatar-alumno avatar-alumno-placeholder" style={estilo}>
+      {iniciales || <User size={Math.round(size * 0.55)} />}
+    </div>
+  );
+}
+
 function AlumnosView({
   alumnos,
   busqueda,
@@ -1916,11 +2217,16 @@ function AlumnosView({
                       />
                     </td>
                     <td>
-                      <div className="cell-title">
-                        {a.nombre}
-                        {a.becado && <span className="badge-becado">Becado</span>}
+                      <div className="cell-alumno">
+                        <AvatarAlumno nombre={a.nombre} fotoUrl={a.fotoUrl} size={30} />
+                        <div>
+                          <div className="cell-title">
+                            {a.nombre}
+                            {a.becado && <span className="badge-becado">Becado</span>}
+                          </div>
+                          <div className="cell-sub">{a.telefono || ""}</div>
+                        </div>
                       </div>
-                      <div className="cell-sub">{a.telefono || ""}</div>
                     </td>
                     <td>{a.categoria}</td>
                     <td>{a.horario}</td>
@@ -2559,6 +2865,307 @@ function MargenView({ alumnosActivos, totalGastosMes, monthLabelStr }) {
   );
 }
 
+// CRM de leads: pipeline por etapa (Nuevo → Contactado → Prueba
+// programada → Asistió → Inscrito / No inscrito) del formulario público de
+// inscripción. Nada de información médica se muestra aquí en la tarjeta
+// compacta — eso solo se ve dentro del detalle (ver LeadDetalleModal), con
+// el mismo cuidado que ya tiene esta app con los datos financieros.
+function CrmView({
+  leads,
+  leadsDelMesCount,
+  tasaConversionLeads,
+  leadsSinSeguimientoCount,
+  monthLabelStr,
+  onCambiarEstado,
+  onAbrirLead,
+}) {
+  return (
+    <div className="stack">
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#E7F7FD", color: "#0090C2" }}>
+            <Users size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Leads en {monthLabelStr}</div>
+            <div className="kpi-value">{leadsDelMesCount}</div>
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#E7F7F1", color: "#158F63" }}>
+            <ArrowUpRight size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Tasa de conversión ({monthLabelStr})</div>
+            <div className="kpi-value">{tasaConversionLeads}%</div>
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#FBEAE9", color: "#C13F3B" }}>
+            <AlertTriangle size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Sin seguimiento (+3 días)</div>
+            <div className="kpi-value">{leadsSinSeguimientoCount}</div>
+          </div>
+        </div>
+      </div>
+
+      {leads.length === 0 ? (
+        <div className="empty">
+          Todavía no ha llegado ningún lead del formulario de inscripción.
+        </div>
+      ) : (
+        <div className="crm-pipeline">
+          {ESTADOS_LEAD.map((col) => {
+            const leadsCol = leads.filter((l) => l.estado === col.value);
+            const info = estadoLeadInfo(col.value);
+            return (
+              <div className="crm-columna" key={col.value}>
+                <div className="crm-columna-head">
+                  <span className="badge" style={{ color: info.color, background: info.bg }}>
+                    {col.label}
+                  </span>
+                  <span className="crm-columna-count">{leadsCol.length}</span>
+                </div>
+                <div className="crm-columna-lista">
+                  {leadsCol.length === 0 ? (
+                    <div className="empty small">Vacío.</div>
+                  ) : (
+                    leadsCol.map((lead) => (
+                      <LeadCard
+                        key={lead.id}
+                        lead={lead}
+                        onAbrir={() => onAbrirLead(lead)}
+                        onCambiarEstado={(estado) => onCambiarEstado(lead.id, estado)}
+                      />
+                    ))
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Tarjeta compacta de un lead dentro de una columna del pipeline. Muestra
+// solo lo necesario para triage rápido — nombre, contacto, programa(s) y
+// cuánto tiempo lleva en la etapa — nunca datos médicos ni notas internas.
+function LeadCard({ lead, onAbrir, onCambiarEstado }) {
+  const dias = diasDesde(lead.createdAt);
+  const telefono = telefonoContactoLead(lead);
+  const programas = (lead.programas || []).join(", ");
+  return (
+    <div className="crm-card">
+      <button type="button" className="crm-card-main" onClick={onAbrir}>
+        <div className="cell-title">{lead.nombreAlumno || "(sin nombre)"}</div>
+        {telefono && <div className="cell-sub">{telefono}</div>}
+        {programas && <div className="cell-sub crm-card-programa">{programas}</div>}
+        <div className="crm-card-dias">
+          {dias === null ? "" : dias === 0 ? "Hoy" : `Hace ${dias} día(s)`}
+        </div>
+      </button>
+      <select
+        className="crm-card-select"
+        value={lead.estado}
+        onChange={(e) => onCambiarEstado(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {ESTADOS_LEAD.map((op) => (
+          <option key={op.value} value={op.value}>
+            {op.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// Detalle de un lead: todos los campos capturados (incluida la información
+// médica, que aquí SÍ se muestra porque es la vista de detalle, con acceso
+// solo para admin), más "notas internas" (editable, privado) y el botón
+// para convertirlo en alumno.
+function LeadDetalleModal({ lead, onCerrar, onGuardarNotas, onConvertir, enviando }) {
+  const [notas, setNotas] = useState(lead.notasInternas || "");
+
+  return (
+    <div className="modal-overlay" onClick={onCerrar}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{lead.nombreAlumno || "(sin nombre)"}</h3>
+          <button className="icon-btn" onClick={onCerrar} aria-label="Cerrar">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="crm-detalle-body">
+          <div className="form-section-label">Datos del alumno</div>
+          <div className="crm-detalle-grid">
+            <DetalleCampo label="Fecha de nacimiento" valor={lead.fechaNacimiento} />
+            <DetalleCampo label="Género" valor={lead.genero} />
+            <DetalleCampo label="Posición" valor={lead.posicion} />
+            <DetalleCampo label="Talla de uniforme" valor={lead.tallaUniforme} />
+            <DetalleCampo label="Programa(s)" valor={(lead.programas || []).join(", ")} />
+          </div>
+
+          <div className="form-section-label">Padre</div>
+          <div className="crm-detalle-grid">
+            <DetalleCampo label="Nombre" valor={lead.nombrePadre} />
+            <DetalleCampo label="Fecha de nacimiento" valor={lead.fechaNacimientoPadre} />
+            <DetalleCampo label="Teléfono" valor={lead.telefonoPadre} />
+            <DetalleCampo label="Correo" valor={lead.correoPadre} />
+          </div>
+
+          <div className="form-section-label">Madre</div>
+          <div className="crm-detalle-grid">
+            <DetalleCampo label="Nombre" valor={lead.nombreMadre} />
+            <DetalleCampo label="Fecha de nacimiento" valor={lead.fechaNacimientoMadre} />
+            <DetalleCampo label="Teléfono" valor={lead.telefonoMadre} />
+            <DetalleCampo label="Correo" valor={lead.correoMadre} />
+          </div>
+
+          <div className="form-section-label">Información médica</div>
+          <div className="crm-detalle-grid">
+            <DetalleCampo label="Alergias" valor={lead.alergias} ancho />
+            <DetalleCampo label="Condiciones médicas" valor={lead.condicionesMedicas} ancho />
+            <DetalleCampo label="Medicamentos que no puede ingerir" valor={lead.medicamentos} ancho />
+            <DetalleCampo label="¿Tiene seguro médico?" valor={lead.tieneSeguro === null || lead.tieneSeguro === undefined ? "" : lead.tieneSeguro ? "Sí" : "No"} />
+            <DetalleCampo label="Aseguradora / teléfono / póliza" valor={lead.seguroInfo} ancho />
+            <DetalleCampo
+              label="¿Le interesa info de seguro?"
+              valor={lead.interesadoSeguro === null || lead.interesadoSeguro === undefined ? "" : lead.interesadoSeguro ? "Sí, interesado" : "No gracias"}
+            />
+          </div>
+
+          {lead.comentarios && (
+            <>
+              <div className="form-section-label">Comentarios</div>
+              <p className="muted" style={{ marginTop: 6 }}>{lead.comentarios}</p>
+            </>
+          )}
+
+          <div className="form-section-label">Notas internas (solo staff)</div>
+          <div className="form" style={{ gap: 8 }}>
+            <textarea
+              rows={3}
+              value={notas}
+              onChange={(e) => setNotas(e.target.value)}
+              placeholder="Ej: llamé el martes, quedó de confirmar horario…"
+            />
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ alignSelf: "flex-start" }}
+              onClick={() => onGuardarNotas(lead.id, notas)}
+              disabled={enviando}
+            >
+              Guardar notas
+            </button>
+          </div>
+        </div>
+
+        <div className="modal-actions">
+          <button type="button" className="btn-secondary" onClick={onCerrar} disabled={enviando}>
+            Cerrar
+          </button>
+          <button type="button" className="btn-primary" onClick={onConvertir} disabled={enviando}>
+            Convertir en alumno
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DetalleCampo({ label, valor, ancho }) {
+  return (
+    <div className={"crm-detalle-campo" + (ancho ? " ancho" : "")}>
+      <div className="crm-detalle-label">{label}</div>
+      <div className="crm-detalle-valor">{valor || valor === false ? String(valor) : "—"}</div>
+    </div>
+  );
+}
+
+// Paso de confirmación para convertir un lead en alumno: el admin elige
+// categoría, horario y tarifa mensual (lo que el lead marcó en "programas"
+// no coincide necesariamente con CATEGORIAS/HORARIOS de esta app, así que
+// no se adivina — se elige aquí a mano) y luego llama a
+// convertir_lead_a_alumno.
+function ConvertirLeadModal({ lead, onConfirmar, onCancelar, enviando }) {
+  const [categoria, setCategoria] = useState(CATEGORIAS[0]);
+  const [horario, setHorario] = useState(HORARIOS[0]);
+  const [tarifaMensual, setTarifaMensual] = useState("");
+  const [error, setError] = useState(null);
+
+  function handleConfirmar() {
+    const tarifaNum = parseMonto(tarifaMensual);
+    if (tarifaMensual === "" || isNaN(tarifaNum) || tarifaNum < 0) {
+      setError("Ingresa una tarifa mensual válida (por ejemplo 425 o 425.00).");
+      return;
+    }
+    setError(null);
+    onConfirmar({ categoria, horario, tarifaMensual: tarifaNum });
+  }
+
+  return (
+    <div className="modal-overlay" onClick={enviando ? undefined : onCancelar}>
+      <div className="modal small" onClick={(e) => e.stopPropagation()}>
+        <h3>Convertir a {lead.nombreAlumno} en alumno</h3>
+        <p className="muted">
+          El programa que marcó en el formulario ({(lead.programas || []).join(", ") || "—"}) no
+          se traduce solo — elige aquí la categoría, el horario y la tarifa mensual que le
+          corresponden en la academia.
+        </p>
+        {error && <div className="form-error">{error}</div>}
+        <div className="form">
+          <label>
+            Categoría
+            <select value={categoria} onChange={(e) => setCategoria(e.target.value)}>
+              {CATEGORIAS.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Horario
+            <select value={horario} onChange={(e) => setHorario(e.target.value)}>
+              {HORARIOS.map((h) => (
+                <option key={h} value={h}>
+                  {h}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Tarifa mensual
+            <input
+              type="text"
+              inputMode="decimal"
+              placeholder="0.00"
+              value={tarifaMensual}
+              onChange={(e) => setTarifaMensual(e.target.value)}
+              autoFocus
+            />
+          </label>
+          <div className="modal-actions">
+            <button type="button" className="btn-secondary" onClick={onCancelar} disabled={enviando}>
+              Cancelar
+            </button>
+            <button type="button" className="btn-primary" onClick={handleConfirmar} disabled={enviando}>
+              {enviando ? "Convirtiendo…" : "Convertir en alumno"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Pasar lista. La usan tanto el admin como los entrenadores — a los
 // entrenadores se les pasa una lista de alumnos SIN tarifa ni saldo
 // (viene de la función alumnos_para_asistencia(), que nunca expone esas
@@ -2669,7 +3276,7 @@ function AsistenciaView({ alumnosActivos, asistencias, onMarcar, marcandoIds }) 
 
 /* ---------------- Componentes ---------------- */
 
-function AlumnoModal({ initial, onSave, onCancel, enviando }) {
+function AlumnoModal({ initial, onSave, onCancel, enviando, showToast }) {
   const [form, setForm] = useState({
     id: initial.id || null,
     nombre: initial.nombre || "",
@@ -2679,8 +3286,51 @@ function AlumnoModal({ initial, onSave, onCancel, enviando }) {
     horario: initial.horario || HORARIOS[0],
     tarifaMensual: initial.tarifaMensual != null ? String(initial.tarifaMensual) : "",
     estado: initial.estado || estadoDeRespaldo(!!initial.becado, initial.activo !== false),
+    fechaNacimiento: initial.fechaNacimiento || "",
+    colegio: initial.colegio || "",
+    contactoEmergenciaNombre: initial.contactoEmergenciaNombre || "",
+    contactoEmergenciaTelefono: initial.contactoEmergenciaTelefono || "",
+    posicion: initial.posicion || "",
+    posicionSecundaria: initial.posicionSecundaria || "",
+    piernaDominante: initial.piernaDominante || "",
+    fotoUrl: initial.fotoUrl || "",
   });
   const [error, setError] = useState(null);
+  const [subiendoFoto, setSubiendoFoto] = useState(false);
+
+  // Sube la foto apenas se elige el archivo (no espera a que se guarde todo
+  // el formulario): valida tipo/tamaño, la sube al bucket 'fotos-alumnos'
+  // con un nombre único, y guarda la URL pública en el campo fotoUrl.
+  async function handleFotoSeleccionada(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      showToast && showToast("Elige un archivo de imagen (jpg, png, etc.).", true);
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      showToast && showToast("La foto pesa más de 5MB. Elige una más liviana.", true);
+      return;
+    }
+    setSubiendoFoto(true);
+    try {
+      const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+      const base = form.id || `nuevo-${Date.now()}`;
+      const ruta = `${base}-${Date.now()}.${ext}`;
+      const { error: errSubida } = await supabase.storage
+        .from("fotos-alumnos")
+        .upload(ruta, file, { upsert: true });
+      if (errSubida) {
+        showToast && showToast("No se pudo subir la foto (revisa tu conexión). Inténtalo de nuevo.", true);
+        return;
+      }
+      const { data } = supabase.storage.from("fotos-alumnos").getPublicUrl(ruta);
+      setForm((prev) => ({ ...prev, fotoUrl: data?.publicUrl || "" }));
+    } finally {
+      setSubiendoFoto(false);
+    }
+  }
 
   // Historial de cambios de tarifa: solo aplica si se está editando a un
   // alumno que ya existe (uno nuevo todavía no tiene historial). Es
@@ -2741,6 +3391,28 @@ function AlumnoModal({ initial, onSave, onCancel, enviando }) {
             if (e.key === "Enter") handleSubmit(e);
           }}
         >
+          <div className="foto-alumno-picker">
+            <div className="avatar-alumno-wrap">
+              {subiendoFoto ? (
+                <div className="avatar-alumno avatar-alumno-placeholder" style={{ width: 72, height: 72 }}>
+                  <Loader2 size={22} className="spin" />
+                </div>
+              ) : (
+                <AvatarAlumno nombre={form.nombre} fotoUrl={form.fotoUrl} size={72} />
+              )}
+            </div>
+            <label className="btn-secondary foto-alumno-btn">
+              <Camera size={15} />
+              {form.fotoUrl ? "Cambiar foto" : "Subir foto"}
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleFotoSeleccionada}
+                disabled={subiendoFoto}
+                style={{ display: "none" }}
+              />
+            </label>
+          </div>
           <label>
             Nombre completo
             <input
@@ -2837,6 +3509,91 @@ function AlumnoModal({ initial, onSave, onCancel, enviando }) {
           {form.estado === "retirado" && (
             <p className="muted">Retirado: no aparece en asistencia ni en el cobro mensual.</p>
           )}
+
+          <div className="form-section-label">Datos deportivos</div>
+          <label>
+            Fecha de nacimiento
+            <input
+              type="date"
+              value={form.fechaNacimiento}
+              onChange={(e) => setForm({ ...form, fechaNacimiento: e.target.value })}
+            />
+            {form.fechaNacimiento && (
+              <span className="edad-calculada">{calcularEdad(form.fechaNacimiento)} años</span>
+            )}
+          </label>
+          <label>
+            Colegio
+            <input
+              type="text"
+              value={form.colegio}
+              onChange={(e) => setForm({ ...form, colegio: e.target.value })}
+            />
+          </label>
+          <div className="form-row">
+            <label>
+              Posición
+              <select
+                value={form.posicion}
+                onChange={(e) => setForm({ ...form, posicion: e.target.value })}
+              >
+                <option value="">Sin definir</option>
+                {POSICIONES.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Posición secundaria
+              <select
+                value={form.posicionSecundaria}
+                onChange={(e) => setForm({ ...form, posicionSecundaria: e.target.value })}
+              >
+                <option value="">Ninguna</option>
+                {POSICIONES.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label>
+            Pierna dominante
+            <select
+              value={form.piernaDominante}
+              onChange={(e) => setForm({ ...form, piernaDominante: e.target.value })}
+            >
+              <option value="">Sin definir</option>
+              {PIERNA_DOMINANTE.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="form-section-label">Contacto de emergencia</div>
+          <div className="form-row">
+            <label>
+              Nombre
+              <input
+                type="text"
+                value={form.contactoEmergenciaNombre}
+                onChange={(e) => setForm({ ...form, contactoEmergenciaNombre: e.target.value })}
+              />
+            </label>
+            <label>
+              Teléfono
+              <input
+                type="text"
+                value={form.contactoEmergenciaTelefono}
+                onChange={(e) => setForm({ ...form, contactoEmergenciaTelefono: e.target.value })}
+              />
+            </label>
+          </div>
 
           {form.id && (
             <div className="historial-tarifa">
@@ -3259,6 +4016,15 @@ function Styles() {
       .row-inactive { opacity: 0.5; }
       .cell-title { font-weight: 500; color: var(--charcoal); }
       .badge-becado { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; color: #B4790A; background: #FCF1DD; padding: 1.5px 7px; border-radius: var(--radius-pill); vertical-align: middle; }
+
+      .cell-alumno { display: flex; align-items: center; gap: 10px; }
+      .avatar-alumno { border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+      .avatar-alumno-placeholder { display: flex; align-items: center; justify-content: center; background: #E7F7FD; color: #0090C2; font-weight: 700; letter-spacing: 0.3px; }
+      .foto-alumno-picker { display: flex; align-items: center; gap: 14px; }
+      .avatar-alumno-wrap { flex-shrink: 0; }
+      .foto-alumno-btn { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 6px; cursor: pointer; width: auto; font-size: 13px !important; color: var(--charcoal) !important; }
+      .form-section-label { font-size: 12px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; color: #8A8D90; border-top: 1px solid var(--border-soft); padding-top: 14px; margin-top: 2px; }
+      .edad-calculada { font-size: 12px; color: #8A8D90; font-weight: 400; }
       .cell-sub { font-size: 12px; color: #8A8D90; margin-top: 1px; }
 
       .badge { padding: 3px 10px; border-radius: var(--radius-pill); font-weight: 600; font-size: 12.5px; white-space: nowrap; }
@@ -3356,6 +4122,35 @@ function Styles() {
         color: var(--ink); background: #fff; outline: none; transition: border-color 0.15s ease, box-shadow 0.15s ease; min-height: 42px; width: 100%;
       }
       .form input:focus, .form select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px #E7F7FD; }
+      .form textarea {
+        font-family: var(--font-body); font-size: 15px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);
+        color: var(--ink); background: #fff; outline: none; transition: border-color 0.15s ease, box-shadow 0.15s ease; width: 100%; resize: vertical;
+      }
+      .form textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px #E7F7FD; }
+
+      /* ---------- CRM de leads ---------- */
+      .crm-pipeline { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 6px; }
+      .crm-columna {
+        background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-md);
+        flex: 0 0 250px; display: flex; flex-direction: column; max-height: 72vh; box-shadow: var(--shadow-card);
+      }
+      .crm-columna-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 12px 10px; border-bottom: 1px solid var(--border-soft); }
+      .crm-columna-count { font-size: 12px; color: #8A8D90; font-weight: 600; }
+      .crm-columna-lista { display: flex; flex-direction: column; gap: 8px; padding: 10px; overflow-y: auto; }
+      .crm-card { background: #FAFBFC; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+      .crm-card-main { display: flex; flex-direction: column; gap: 2px; text-align: left; background: none; border: none; padding: 0; cursor: pointer; font-family: var(--font-body); }
+      .crm-card-main:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+      .crm-card-programa { color: #6C6F72; }
+      .crm-card-dias { font-size: 11px; color: #8A8D90; margin-top: 3px; }
+      .crm-card-select {
+        font-family: var(--font-body); font-size: 12px; padding: 6px 8px; border-radius: var(--radius-sm);
+        border: 1px solid var(--border); background: #fff; color: var(--ink); width: 100%;
+      }
+      .crm-detalle-body { display: flex; flex-direction: column; gap: 6px; }
+      .crm-detalle-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 4px; }
+      .crm-detalle-campo.ancho { grid-column: 1 / -1; }
+      .crm-detalle-label { font-size: 11px; color: #8A8D90; text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 2px; }
+      .crm-detalle-valor { font-size: 13.5px; color: var(--ink); word-break: break-word; }
 
       .pago-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
       .pago-list li { padding-bottom: 10px; border-bottom: 1px solid var(--border-soft); }
@@ -3440,6 +4235,8 @@ function Styles() {
         .login-card { padding: 24px 18px; }
         .cobro-head { flex-direction: column; align-items: stretch; }
         .cobro-head .btn-primary { width: 100%; }
+        .crm-columna { flex-basis: 82vw; max-height: 60vh; }
+        .crm-detalle-grid { grid-template-columns: 1fr; }
       }
     `}</style>
   );
