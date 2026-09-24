@@ -413,6 +413,37 @@ function mensajeEvento(evento, nombresConvocados) {
   return lineas.join("\n");
 }
 
+// Limpia un teléfono guardado (con guiones, espacios, etc.) y le antepone
+// el código de país de Guatemala si hace falta, para armar el link de
+// WhatsApp de ese contacto en particular (wa.me/<numero>?text=...). Si no
+// hay teléfono o no se puede reconocer, devuelve null y el botón de
+// WhatsApp en pantalla cae de vuelta al link genérico (wa.me/?text=...).
+function telefonoWhatsapp(telefono) {
+  const digitos = (telefono || "").replace(/\D/g, "");
+  if (!digitos) return null;
+  if (digitos.length === 8) return "502" + digitos;
+  if (digitos.length > 8) return digitos;
+  return null;
+}
+
+// Arma el mensaje de recordatorio de pago para un alumno con saldo
+// pendiente, listo para copiar o mandar directo a WhatsApp — igual que
+// mensajeEvento, la app arma el texto pero quien decide a quién y cuándo
+// mandarlo es la persona, nunca se manda nada automáticamente.
+function mensajeRecordatorioPago(alumno) {
+  const lineas = [];
+  lineas.push(`Hola${alumno.encargado ? " " + alumno.encargado : ""}, le saludamos de Atletic Guatemala.`);
+  lineas.push(
+    `Le escribimos para recordarle que ${alumno.nombre}${
+      alumno.categoria ? ` (categoría ${alumno.categoria})` : ""
+    } tiene un saldo pendiente de ${formatQ(alumno.saldoPendiente)}.`
+  );
+  lineas.push("Le agradecemos ponerse al día cuando pueda. Cualquier duda, con gusto le apoyamos.");
+  lineas.push("");
+  lineas.push("Atletic Guatemala");
+  return lineas.join("\n");
+}
+
 // Columnas del pipeline de leads, en el orden fijo que pidió el dueño.
 const ESTADOS_LEAD = [
   { value: "nuevo", label: "Nuevo" },
@@ -1397,6 +1428,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
           { key: "alumnos", label: "Alumnos" },
           { key: "pago", label: "Registrar pago" },
           { key: "cobro", label: "Cobro mensual" },
+          { key: "cartera", label: "Cartera" },
           { key: "asistencia", label: "Asistencia" },
           { key: "calendario", label: "Calendario" },
         ].map((t) => (
@@ -1465,6 +1497,8 @@ function PanelAdministrativo({ perfil, onLogout }) {
                 onGenerar={() => setConfirmCargo(true)}
               />
             )}
+
+            {tab === "cartera" && <CarteraView alumnosActivos={alumnosActivos} />}
 
             {tab === "asistencia" && (
               <AsistenciaView
@@ -2343,6 +2377,7 @@ function PanelAdmin({ perfil, onLogout }) {
           { key: "pago", label: "Registrar pago" },
           { key: "gasto", label: "Gastos" },
           { key: "cobro", label: "Cobro mensual" },
+          { key: "cartera", label: "Cartera" },
           { key: "asistencia", label: "Asistencia" },
           { key: "margen", label: "Margen" },
           { key: "crm", label: "CRM" },
@@ -2439,6 +2474,8 @@ function PanelAdmin({ perfil, onLogout }) {
                 onGenerar={() => setConfirmCargo(true)}
               />
             )}
+
+            {tab === "cartera" && <CarteraView alumnosActivos={alumnosActivos} />}
 
             {tab === "asistencia" && (
               <AsistenciaView
@@ -4469,6 +4506,122 @@ function ConvertirLeadModal({ lead, onConfirmar, onCancelar, enviando }) {
 // (viene de la función alumnos_para_asistencia(), que nunca expone esas
 // columnas), así que este componente ni siquiera tiene esos datos
 // disponibles para mostrar por accidente.
+// Cartera / seguimiento de cobros: alumnos activos con saldo pendiente,
+// ordenados de mayor a menor deuda, cada uno con un mensaje de recordatorio
+// ya armado listo para copiar o mandar directo a WhatsApp al teléfono del
+// encargado. Nadie se manda automáticamente — la persona elige y confirma
+// el envío desde su propio WhatsApp, igual que con las convocatorias.
+function CarteraView({ alumnosActivos }) {
+  const [busqueda, setBusqueda] = useState("");
+  const [copiadoId, setCopiadoId] = useState(null);
+
+  const conDeuda = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    return alumnosActivos
+      .filter((a) => Number(a.saldoPendiente || 0) > 0)
+      .filter((a) =>
+        q
+          ? a.nombre.toLowerCase().includes(q) ||
+            (a.encargado || "").toLowerCase().includes(q) ||
+            (a.categoria || "").toLowerCase().includes(q)
+          : true
+      )
+      .sort((a, b) => Number(b.saldoPendiente || 0) - Number(a.saldoPendiente || 0));
+  }, [alumnosActivos, busqueda]);
+
+  const totalDeuda = conDeuda.reduce((s, a) => s + Number(a.saldoPendiente || 0), 0);
+
+  async function copiar(a) {
+    try {
+      await navigator.clipboard.writeText(mensajeRecordatorioPago(a));
+      setCopiadoId(a.id);
+      setTimeout(() => setCopiadoId(null), 2000);
+    } catch {
+      // Si el navegador bloquea el portapapeles no pasa nada — el botón de
+      // WhatsApp de al lado no depende de esto y sigue funcionando.
+    }
+  }
+
+  return (
+    <div className="stack">
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#FBEAE9", color: "#C13F3B" }}>
+            <AlertTriangle size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Alumnos con saldo pendiente</div>
+            <div className="kpi-value">{conDeuda.length}</div>
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#FCF1DD", color: "#B4790A" }}>
+            <Wallet size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Total por cobrar</div>
+            <div className="kpi-value">{formatQ(totalDeuda)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="toolbar">
+          <div className="search-box">
+            <Search size={16} />
+            <input
+              placeholder="Buscar por nombre, encargado o categoría…"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+
+      {conDeuda.length === 0 ? (
+        <div className="empty">No hay alumnos con saldo pendiente. Todo al día.</div>
+      ) : (
+        <div className="stack" style={{ gap: 8 }}>
+          {conDeuda.map((a) => {
+            const tone = saldoTone(Number(a.saldoPendiente || 0), Number(a.tarifaMensual || 0));
+            const numeroWa = telefonoWhatsapp(a.telefono);
+            const texto = mensajeRecordatorioPago(a);
+            return (
+              <div key={a.id} className="panel cartera-fila">
+                <div className="cartera-fila-info">
+                  <div className="cartera-fila-titulo">
+                    {a.nombre}
+                    <span className="badge" style={{ color: tone.color, background: tone.bg }}>
+                      {tone.label}
+                    </span>
+                  </div>
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    {[a.categoria, a.encargado, a.telefono].filter(Boolean).join(" · ") || "Sin más datos"}
+                  </div>
+                </div>
+                <div className="cartera-fila-monto num debt">{formatQ(a.saldoPendiente)}</div>
+                <div className="cartera-fila-acciones">
+                  <button className="btn-secondary" onClick={() => copiar(a)}>
+                    <Copy size={15} /> {copiadoId === a.id ? "¡Copiado!" : "Copiar"}
+                  </button>
+                  <a
+                    className="btn-primary"
+                    href={`https://wa.me/${numeroWa || ""}?text=${encodeURIComponent(texto)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <MessageCircle size={15} /> WhatsApp
+                  </a>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AsistenciaView({ alumnosActivos, asistencias, onMarcar, marcandoIds }) {
   const [fecha, setFecha] = useState(todayISO());
   const [busqueda, setBusqueda] = useState("");
@@ -5340,6 +5493,13 @@ function Styles() {
       .evento-tipo-torneo { background: #FBEAE9; color: #C13F3B; }
       .evento-tipo-entrenamiento { background: #E7F7F1; color: #158F63; }
       .evento-tipo-suspension { background: #F1EAFB; color: #6B3FC1; }
+
+      /* Cartera / recordatorios de pago */
+      .cartera-fila { display: flex; align-items: center; gap: 14px; padding: 12px 14px; flex-wrap: wrap; }
+      .cartera-fila-info { flex: 1; min-width: 160px; }
+      .cartera-fila-titulo { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .cartera-fila-monto { font-size: 16px; font-weight: 700; flex-shrink: 0; }
+      .cartera-fila-acciones { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
       .calendario-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
       .calendario-nav { display: flex; align-items: center; gap: 4px; }
