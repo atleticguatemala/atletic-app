@@ -50,6 +50,35 @@ import { supabase } from "./lib/supabase.js";
 // ---------- Traducción entre los nombres que usa la pantalla (camelCase)
 // y los nombres de columnas en la base de datos (snake_case) ----------
 
+// Un alumno tiene un solo "estado" visible (activo / prueba / becado /
+// congelado / retirado), pero por debajo la base de datos sigue guiándose
+// por las dos banderas de siempre (`activo` y `becado`), porque de ellas
+// dependen `alumnos_para_asistencia()`, `alumnos_para_pagos()`, el cobro
+// mensual y los filtros de la pantalla. Esta función es la ÚNICA que decide
+// cómo se traduce el estado a esas dos banderas, para que nunca queden
+// desincronizadas sin importar desde dónde se guarde un alumno.
+//   - becado    -> becado: true,  activo: true   (no se le cobra, pero sigue activo)
+//   - retirado  -> becado: false, activo: false  (fuera de listas y cobro)
+//   - congelado -> becado: false, activo: false  (pausado: igual que retirado
+//                  para asistencia/cobro, pero reversible y visible aparte)
+//   - prueba / activo -> becado: false, activo: true
+function flagsDeEstado(estado) {
+  if (estado === "becado") return { becado: true, activo: true };
+  if (estado === "retirado") return { becado: false, activo: false };
+  if (estado === "congelado") return { becado: false, activo: false };
+  return { becado: false, activo: true }; // "prueba" y "activo"
+}
+
+// Para alumnos guardados antes de que existiera la columna `estado` (o si
+// por lo que sea todavía no corriste la migración en Supabase), calcula un
+// estado de respaldo a partir de becado/activo — mismo criterio que usa el
+// backfill del SQL — para que la pantalla nunca muestre un estado en blanco.
+function estadoDeRespaldo(becado, activo) {
+  if (becado) return "becado";
+  if (activo) return "activo";
+  return "retirado";
+}
+
 function alumnoFromDb(r) {
   return {
     id: r.id,
@@ -60,6 +89,7 @@ function alumnoFromDb(r) {
     horario: r.horario,
     tarifaMensual: Number(r.tarifa_mensual) || 0,
     becado: !!r.becado,
+    estado: r.estado || estadoDeRespaldo(!!r.becado, r.activo),
     saldoPendiente: Number(r.saldo_pendiente) || 0,
     ultimoMesCobrado: r.ultimo_mes_cobrado,
     activo: r.activo,
@@ -67,6 +97,8 @@ function alumnoFromDb(r) {
   };
 }
 function alumnoToDb(a) {
+  const estado = a.estado || estadoDeRespaldo(!!a.becado, a.activo !== false);
+  const { becado, activo } = flagsDeEstado(estado);
   return {
     nombre: a.nombre,
     encargado: a.encargado,
@@ -74,8 +106,9 @@ function alumnoToDb(a) {
     categoria: a.categoria,
     horario: a.horario,
     tarifa_mensual: Number(a.tarifaMensual) || 0,
-    becado: !!a.becado,
-    activo: a.activo,
+    estado,
+    becado,
+    activo,
   };
 }
 
@@ -96,7 +129,15 @@ function ajusteFromDb(r) {
 }
 
 function asistenciaFromDb(r) {
-  return { id: r.id, alumnoId: r.alumno_id, fecha: r.fecha, presente: !!r.presente, nota: r.nota, entrenadorId: r.entrenador_id };
+  return {
+    id: r.id,
+    alumnoId: r.alumno_id,
+    fecha: r.fecha,
+    presente: !!r.presente,
+    nota: r.nota,
+    motivoAusencia: r.motivo_ausencia,
+    entrenadorId: r.entrenador_id,
+  };
 }
 
 function historialTarifaFromDb(r) {
@@ -107,6 +148,33 @@ function historialTarifaFromDb(r) {
     tarifaNueva: Number(r.tarifa_nueva) || 0,
     fecha: r.fecha,
   };
+}
+
+const ESTADOS_ALUMNO = [
+  { value: "activo", label: "Activo" },
+  { value: "prueba", label: "En prueba" },
+  { value: "becado", label: "Becado" },
+  { value: "congelado", label: "Congelado" },
+  { value: "retirado", label: "Retirado" },
+];
+
+// Colores del badge de estado en la lista de alumnos. Reutiliza la misma
+// paleta (color + fondo suave) que ya usan los badges de saldo y el de
+// "Becado" junto al nombre, para que se vea consistente con el resto.
+function estadoInfo(estado) {
+  switch (estado) {
+    case "prueba":
+      return { label: "En prueba", color: "#0090C2", bg: "#E7F7FD" };
+    case "becado":
+      return { label: "Becado", color: "#B4790A", bg: "#FCF1DD" };
+    case "congelado":
+      return { label: "Congelado", color: "#C1673B", bg: "#FBEEE5" };
+    case "retirado":
+      return { label: "Retirado", color: "#8A8D90", bg: "#F0F2F3" };
+    case "activo":
+    default:
+      return { label: "Activo", color: "#158F63", bg: "#E7F7F1" };
+  }
 }
 
 const CATEGORIAS = [
@@ -135,6 +203,15 @@ const HORARIOS = [
 const METODOS_PAGO = ["Efectivo", "Depósito BI", "Depósito OB", "Transferencia", "Otro"];
 
 const CATEGORIAS_GASTO = ["Cancha", "Pago a entrenador", "Equipo y material", "Publicidad", "Otro"];
+
+// Motivos de ausencia: opciones fijas que pidió el dueño, en este orden
+// exacto ("Otro" se agregó como comodín para casos que no encajen en las
+// otras cuatro).
+const MOTIVOS_AUSENCIA = ["No confirmó", "Enfermo", "Estudios", "Lesión", "Otro"];
+
+// Etiqueta para agrupar en Asistencia a los alumnos sin categoría asignada
+// (o con una categoría que ya no está en la lista de CATEGORIAS).
+const CATEGORIA_SIN_ASIGNAR = "Sin categoría";
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -353,6 +430,12 @@ function PanelEntrenador({ perfil, onLogout }) {
   const [asistencias, setAsistencias] = useState([]);
   const [loading, setLoading] = useState(true);
   const [marcandoIds, setMarcandoIds] = useState(() => new Set());
+  const [toast, setToast] = useState(null);
+
+  function showToast(msg, isError) {
+    setToast({ msg, isError: !!isError });
+    setTimeout(() => setToast(null), 2600);
+  }
 
   async function cargar() {
     const [a, s] = await Promise.all([
@@ -379,12 +462,43 @@ function PanelEntrenador({ perfil, onLogout }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function marcarAsistencia(alumnoId, fecha, presente) {
+  async function marcarAsistencia(alumnoId, fecha, presente, motivoAusencia) {
     if (marcandoIds.has(alumnoId)) return;
     setMarcandoIds((prev) => new Set(prev).add(alumnoId));
     try {
-      await supabase.rpc("marcar_asistencia", { p_alumno_id: alumnoId, p_fecha: fecha, p_presente: presente });
-      await cargar();
+      const { error } = await supabase.rpc("marcar_asistencia", {
+        p_alumno_id: alumnoId,
+        p_fecha: fecha,
+        p_presente: presente,
+        p_motivo_ausencia: presente ? null : motivoAusencia || null,
+      });
+      if (!error) {
+        await cargar();
+      } else {
+        showToast("No se pudo guardar la asistencia (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      setMarcandoIds((prev) => {
+        const next = new Set(prev);
+        next.delete(alumnoId);
+        return next;
+      });
+    }
+  }
+
+  // Quita una marca ya puesta (vuelve al estado "sin marcar"). Las
+  // políticas de la base de datos ya limitan esto a las marcas propias
+  // (ver "entrenador borra propias" en supabase-schema.sql).
+  async function desmarcarAsistencia(alumnoId, fecha, asistenciaId) {
+    if (marcandoIds.has(alumnoId)) return;
+    setMarcandoIds((prev) => new Set(prev).add(alumnoId));
+    try {
+      const { error } = await supabase.from("asistencias").delete().eq("id", asistenciaId);
+      if (!error) {
+        await cargar();
+      } else {
+        showToast("No se pudo quitar la marca (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
     } finally {
       setMarcandoIds((prev) => {
         const next = new Set(prev);
@@ -418,10 +532,14 @@ function PanelEntrenador({ perfil, onLogout }) {
             alumnosActivos={alumnos}
             asistencias={asistencias}
             onMarcar={marcarAsistencia}
+            onDesmarcar={desmarcarAsistencia}
             marcandoIds={marcandoIds}
           />
         )}
       </main>
+      {toast && (
+        <div className={"toast" + (toast.isError ? " toast-error" : "")}>{toast.msg}</div>
+      )}
     </div>
   );
 }
@@ -875,23 +993,6 @@ function PanelAdmin({ perfil, onLogout }) {
     }
   }
 
-  async function toggleActivo(id) {
-    if (!iniciarEnvio()) return;
-    try {
-      const alumno = alumnos.find((a) => a.id === id);
-      if (!alumno) return;
-      const nuevoActivo = alumno.activo === false;
-      const { error } = await supabase.from("alumnos").update({ activo: nuevoActivo }).eq("id", id);
-      if (!error) {
-        setAlumnos((prev) => prev.map((a) => (a.id === id ? { ...a, activo: nuevoActivo } : a)));
-      } else {
-        showToast("No se pudo guardar el cambio (revisa tu conexión). Inténtalo de nuevo.", true);
-      }
-    } finally {
-      terminarEnvio();
-    }
-  }
-
   async function registrarPago(e) {
     if (e && e.preventDefault) e.preventDefault();
     if (!iniciarEnvio()) return; // ya hay un guardado en curso: ignora el clic repetido
@@ -1311,7 +1412,6 @@ function PanelAdmin({ perfil, onLogout }) {
                 onEditar={(a) => setAlumnoModal(a)}
                 onEliminar={(a) => setConfirmDelete(a)}
                 onEliminarVarios={(ids) => setConfirmDeleteVarios(ids)}
-                onToggleActivo={toggleActivo}
                 onCorregirSaldo={(a) => setAjusteModal(a)}
               />
             )}
@@ -1715,7 +1815,6 @@ function AlumnosView({
   onEditar,
   onEliminar,
   onEliminarVarios,
-  onToggleActivo,
   onCorregirSaldo,
 }) {
   const [seleccionados, setSeleccionados] = useState(() => new Set());
@@ -1840,12 +1939,12 @@ function AlumnosView({
                       )}
                     </td>
                     <td>
-                      <button
-                        className={"pill-toggle" + (a.activo === false ? "" : " on")}
-                        onClick={() => onToggleActivo(a.id)}
+                      <span
+                        className="badge"
+                        style={{ color: estadoInfo(a.estado).color, background: estadoInfo(a.estado).bg }}
                       >
-                        {a.activo === false ? "Inactivo" : "Activo"}
-                      </button>
+                        {estadoInfo(a.estado).label}
+                      </span>
                     </td>
                     <td className="actions">
                       <button className="icon-btn" onClick={() => onEditar(a)} aria-label="Editar">
@@ -2579,7 +2678,7 @@ function AlumnoModal({ initial, onSave, onCancel, enviando }) {
     categoria: initial.categoria || CATEGORIAS[0],
     horario: initial.horario || HORARIOS[0],
     tarifaMensual: initial.tarifaMensual != null ? String(initial.tarifaMensual) : "",
-    becado: !!initial.becado,
+    estado: initial.estado || estadoDeRespaldo(!!initial.becado, initial.activo !== false),
   });
   const [error, setError] = useState(null);
 
@@ -2707,23 +2806,37 @@ function AlumnoModal({ initial, onSave, onCancel, enviando }) {
               onChange={(e) => setForm({ ...form, tarifaMensual: e.target.value })}
             />
           </label>
-          <label className="checkbox-field">
-            <input
-              type="checkbox"
-              checked={form.becado}
-              onChange={(e) => setForm({ ...form, becado: e.target.checked })}
-            />
-            <span>
-              Becado (no se le cobra mensualidad)
-              {form.becado && (
-                <span className="checkbox-hint">
-                  {" "}
-                  — no se le sumará ningún cobro mientras esté marcado, aunque tenga tarifa
-                  registrada.
-                </span>
-              )}
-            </span>
+          <label>
+            Estado
+            <select
+              value={form.estado}
+              onChange={(e) => setForm({ ...form, estado: e.target.value })}
+            >
+              {ESTADOS_ALUMNO.map((op) => (
+                <option key={op.value} value={op.value}>
+                  {op.label}
+                </option>
+              ))}
+            </select>
           </label>
+          {form.estado === "becado" && (
+            <p className="muted">
+              Becado: no se le sumará ningún cobro mientras esté en este estado, aunque tenga
+              tarifa registrada.
+            </p>
+          )}
+          {form.estado === "prueba" && (
+            <p className="muted">En prueba: cuenta como activo (asistencia y cobro normal).</p>
+          )}
+          {form.estado === "congelado" && (
+            <p className="muted">
+              Congelado: no aparece en asistencia ni en el cobro mensual (igual que retirado),
+              pero puedes reactivarlo cuando quieras cambiando el estado de vuelta.
+            </p>
+          )}
+          {form.estado === "retirado" && (
+            <p className="muted">Retirado: no aparece en asistencia ni en el cobro mensual.</p>
+          )}
 
           {form.id && (
             <div className="historial-tarifa">
