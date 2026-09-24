@@ -191,6 +191,8 @@ function leadFromDb(r) {
     id: r.id,
     nombreAlumno: r.nombre_alumno,
     fechaNacimiento: r.fecha_nacimiento,
+    fotoUrl: r.foto_url,
+    feEdadUrl: r.fe_edad_url,
     genero: r.genero,
     posicion: r.posicion,
     programas: r.programas || [],
@@ -3003,6 +3005,24 @@ function LeadDetalleModal({ lead, onCerrar, onGuardarNotas, onConvertir, enviand
 
         <div className="crm-detalle-body">
           <div className="form-section-label">Datos del alumno</div>
+          {(lead.fotoUrl || lead.feEdadUrl) && (
+            <div className="crm-detalle-archivos" style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 12 }}>
+              {lead.fotoUrl && (
+                <a href={lead.fotoUrl} target="_blank" rel="noopener noreferrer" title="Ver foto en tamaño completo">
+                  <img
+                    src={lead.fotoUrl}
+                    alt={"Foto de " + (lead.nombreAlumno || "alumno")}
+                    style={{ width: 72, height: 72, borderRadius: "50%", objectFit: "cover", border: "1px solid #ddd" }}
+                  />
+                </a>
+              )}
+              {lead.feEdadUrl && (
+                <a href={lead.feEdadUrl} target="_blank" rel="noopener noreferrer" className="btn-secondary">
+                  Ver fe de edad
+                </a>
+              )}
+            </div>
+          )}
           <div className="crm-detalle-grid">
             <DetalleCampo label="Fecha de nacimiento" valor={lead.fechaNacimiento} />
             <DetalleCampo label="Género" valor={lead.genero} />
