@@ -24,6 +24,9 @@ import {
   Calendar,
   Copy,
   MessageCircle,
+  ChevronDown,
+  ChevronRight,
+  Menu,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -1173,6 +1176,151 @@ function PanelAsistente({ perfil, onLogout }) {
   );
 }
 
+// Agrupa las pestañas en bloques ("pestañas maestras") para que la barra
+// lateral no muestre una lista larga y plana. Un grupo con un solo tab
+// (ej. "Resumen", "CRM") se dibuja como un botón directo, sin flecha ni
+// hijos que desplegar — solo los grupos con más de un tab son expandibles.
+const GRUPOS_NAV_ADMIN = [
+  { key: "resumen", label: "Resumen", tabs: [{ key: "resumen", label: "Resumen" }] },
+  {
+    key: "financiero",
+    label: "Financiero",
+    tabs: [
+      { key: "pago", label: "Registrar pago" },
+      { key: "gasto", label: "Gastos" },
+      { key: "cobro", label: "Cobro mensual" },
+      { key: "cartera", label: "Cartera" },
+      { key: "margen", label: "Margen" },
+    ],
+  },
+  {
+    key: "alumnos",
+    label: "Alumnos",
+    tabs: [
+      { key: "alumnos", label: "Alumnos" },
+      { key: "asistencia", label: "Asistencia" },
+      { key: "uniformes", label: "Uniformes" },
+    ],
+  },
+  {
+    key: "captacion",
+    label: "Captación",
+    tabs: [
+      { key: "crm", label: "CRM" },
+      { key: "calendario", label: "Calendario" },
+      { key: "reporte", label: "Reporte semanal" },
+    ],
+  },
+];
+
+const GRUPOS_NAV_ADMINISTRATIVO = [
+  { key: "crm", label: "CRM", tabs: [{ key: "crm", label: "CRM" }] },
+  {
+    key: "alumnos",
+    label: "Alumnos",
+    tabs: [
+      { key: "alumnos", label: "Alumnos" },
+      { key: "asistencia", label: "Asistencia" },
+      { key: "uniformes", label: "Uniformes" },
+    ],
+  },
+  {
+    key: "financiero",
+    label: "Financiero",
+    tabs: [
+      { key: "pago", label: "Registrar pago" },
+      { key: "cobro", label: "Cobro mensual" },
+      { key: "cartera", label: "Cartera" },
+    ],
+  },
+  {
+    key: "captacion",
+    label: "Captación",
+    tabs: [
+      { key: "calendario", label: "Calendario" },
+      { key: "reporte", label: "Reporte semanal" },
+    ],
+  },
+];
+
+// Dado un tab (ej. "asistencia"), devuelve la key del grupo al que
+// pertenece (ej. "alumnos") — para los accesos directos que cambian de tab
+// sin pasar por la barra lateral (ej. los botones del Resumen), así el
+// grupo correcto queda abierto y el tab activo se ve resaltado.
+function grupoDeTab(grupos, tabKey) {
+  const g = grupos.find((gr) => gr.tabs.some((t) => t.key === tabKey));
+  return g ? g.key : null;
+}
+
+// Barra lateral de navegación agrupada. Componente puro (sin estado propio
+// aparte de si el menú móvil está abierto) para que Admin y Administrativo
+// compartan exactamente la misma lógica — cada panel solo le pasa su
+// arreglo de grupos y guarda su propio "openGroup" con useState.
+function SidebarNav({ grupos, tab, setTab, openGroup, setOpenGroup }) {
+  const [menuMovilAbierto, setMenuMovilAbierto] = useState(false);
+
+  function irATab(tabKey, groupKey) {
+    setTab(tabKey);
+    setOpenGroup(groupKey);
+    setMenuMovilAbierto(false);
+  }
+
+  return (
+    <>
+      <button
+        className="sidebar-toggle-movil"
+        onClick={() => setMenuMovilAbierto((v) => !v)}
+        aria-label="Abrir menú"
+      >
+        <Menu size={18} />
+        {grupos.flatMap((g) => g.tabs).find((t) => t.key === tab)?.label || "Menú"}
+      </button>
+      <nav className={"sidebar" + (menuMovilAbierto ? " sidebar-abierto-movil" : "")}>
+        {grupos.map((g) => {
+          const esDirecto = g.tabs.length === 1 && g.tabs[0].key === g.key;
+          const grupoActivo = g.tabs.some((t) => t.key === tab);
+          if (esDirecto) {
+            return (
+              <button
+                key={g.key}
+                className={"sidebar-tab sidebar-tab-grupo" + (grupoActivo ? " active" : "")}
+                onClick={() => irATab(g.tabs[0].key, g.key)}
+              >
+                {g.label}
+              </button>
+            );
+          }
+          const abierto = openGroup === g.key;
+          return (
+            <div key={g.key} className="sidebar-group">
+              <button
+                className={"sidebar-group-header" + (grupoActivo ? " active" : "")}
+                onClick={() => setOpenGroup(abierto ? null : g.key)}
+              >
+                {g.label}
+                {abierto ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+              </button>
+              {abierto && (
+                <div className="sidebar-subtabs">
+                  {g.tabs.map((t) => (
+                    <button
+                      key={t.key}
+                      className={"sidebar-tab" + (tab === t.key ? " active" : "")}
+                      onClick={() => irATab(t.key, g.key)}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </nav>
+    </>
+  );
+}
+
 // Panel para el rol "administrativo" (ej. la persona que atiende leads,
 // registra alumnos y cobra el día a día, sin manejar decisiones
 // financieras). Reutiliza los mismos componentes que PanelAdmin (CRM,
@@ -1189,6 +1337,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [asistencias, setAsistencias] = useState([]);
   const [eventos, setEventos] = useState([]);
   const [tab, setTab] = useState("crm");
+  const [openGroup, setOpenGroup] = useState("crm"); // grupo de la barra lateral abierto
   const [toast, setToast] = useState(null);
   const [busqueda, setBusqueda] = useState("");
   const [marcandoIds, setMarcandoIds] = useState(() => new Set());
@@ -1528,29 +1677,15 @@ function PanelAdministrativo({ perfil, onLogout }) {
         </button>
       </header>
 
-      <nav className="tabs">
-        {[
-          { key: "crm", label: "CRM" },
-          { key: "alumnos", label: "Alumnos" },
-          { key: "pago", label: "Registrar pago" },
-          { key: "cobro", label: "Cobro mensual" },
-          { key: "cartera", label: "Cartera" },
-          { key: "asistencia", label: "Asistencia" },
-          { key: "uniformes", label: "Uniformes" },
-          { key: "calendario", label: "Calendario" },
-          { key: "reporte", label: "Reporte semanal" },
-        ].map((t) => (
-          <button
-            key={t.key}
-            className={"tab" + (tab === t.key ? " active" : "")}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
-
-      <main className="content">
+      <div className="app-shell">
+        <SidebarNav
+          grupos={GRUPOS_NAV_ADMINISTRATIVO}
+          tab={tab}
+          setTab={setTab}
+          openGroup={openGroup}
+          setOpenGroup={setOpenGroup}
+        />
+        <main className="content">
         {loading ? (
           <div className="empty">Cargando información…</div>
         ) : (
@@ -1640,7 +1775,8 @@ function PanelAdministrativo({ perfil, onLogout }) {
             )}
           </>
         )}
-      </main>
+        </main>
+      </div>
 
       {eventoModal !== null && (
         <EventoModal
@@ -1746,6 +1882,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [leads, setLeads] = useState([]);
   const [eventos, setEventos] = useState([]);
   const [tab, setTab] = useState("resumen");
+  const [openGroup, setOpenGroup] = useState("resumen"); // grupo de la barra lateral abierto
   const [toast, setToast] = useState(null);
   const [eventoModal, setEventoModal] = useState(null); // null | {} (nuevo) | evento (editar)
   const [convocatoriaModal, setConvocatoriaModal] = useState(null);
@@ -1753,6 +1890,15 @@ function PanelAdmin({ perfil, onLogout }) {
   const [confirmDeleteSerieEvento, setConfirmDeleteSerieEvento] = useState(null);
   const [filtroTipoEvento, setFiltroTipoEvento] = useState("");
   const [filtroCategoriaEvento, setFiltroCategoriaEvento] = useState("");
+
+  // Cambia de tab abriendo también el grupo de la barra lateral al que
+  // pertenece — para los accesos directos (ej. botones del Resumen) que no
+  // pasan por SidebarNav.
+  function irTab(tabKey) {
+    setTab(tabKey);
+    const g = grupoDeTab(GRUPOS_NAV_ADMIN, tabKey);
+    if (g) setOpenGroup(g);
+  }
 
   // Evita que un doble clic (u otro disparo repetido) en un botón que
   // guarda datos cree dos registros en vez de uno. enviandoRef se revisa
@@ -2526,32 +2672,15 @@ function PanelAdmin({ perfil, onLogout }) {
         )}
       </header>
 
-      <nav className="tabs">
-        {[
-          { key: "resumen", label: "Resumen" },
-          { key: "alumnos", label: "Alumnos" },
-          { key: "pago", label: "Registrar pago" },
-          { key: "gasto", label: "Gastos" },
-          { key: "cobro", label: "Cobro mensual" },
-          { key: "cartera", label: "Cartera" },
-          { key: "asistencia", label: "Asistencia" },
-          { key: "uniformes", label: "Uniformes" },
-          { key: "margen", label: "Margen" },
-          { key: "crm", label: "CRM" },
-          { key: "calendario", label: "Calendario" },
-          { key: "reporte", label: "Reporte semanal" },
-        ].map((t) => (
-          <button
-            key={t.key}
-            className={"tab" + (tab === t.key ? " active" : "")}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
-
-      <main className="content">
+      <div className="app-shell">
+        <SidebarNav
+          grupos={GRUPOS_NAV_ADMIN}
+          tab={tab}
+          setTab={setTab}
+          openGroup={openGroup}
+          setOpenGroup={setOpenGroup}
+        />
+        <main className="content">
         {loading ? (
           <div className="empty">Cargando información…</div>
         ) : loadError ? (
@@ -2570,10 +2699,10 @@ function PanelAdmin({ perfil, onLogout }) {
                 pagosHoy={pagosHoy}
                 monthLabelStr={monthLabel(currentMonthKey)}
                 conDeuda={conDeuda}
-                onIrAlumnos={() => setTab("alumnos")}
+                onIrAlumnos={() => irTab("alumnos")}
                 presentesHoy={presentesHoy}
                 asistenciasHoyCount={asistenciasHoy.length}
-                onIrAsistencia={() => setTab("asistencia")}
+                onIrAsistencia={() => irTab("asistencia")}
                 chartIngresos={chartIngresos}
                 chartAsistencia={chartAsistencia}
                 pendientesMesActual={pendientesMesActual}
@@ -2685,7 +2814,8 @@ function PanelAdmin({ perfil, onLogout }) {
             )}
           </>
         )}
-      </main>
+        </main>
+      </div>
 
       {eventoModal !== null && (
         <EventoModal
@@ -5796,7 +5926,42 @@ function Styles() {
       .tab:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
       .tab.active { color: var(--blue-dark); border-bottom-color: var(--blue); font-weight: 600; }
 
-      .content { padding: 22px; background: linear-gradient(180deg, #E1F4FC 0%, var(--bg) 380px); }
+      /* ---------- Barra lateral agrupada (Admin / Administrativo) ---------- */
+      .app-shell { display: flex; align-items: flex-start; }
+      .sidebar-toggle-movil { display: none; }
+      .sidebar {
+        width: 208px; flex-shrink: 0; align-self: stretch;
+        background: var(--card); border-right: 1px solid var(--border-soft);
+        padding: 14px 10px; display: flex; flex-direction: column; gap: 3px;
+      }
+      .sidebar-group { display: flex; flex-direction: column; }
+      .sidebar-group-header {
+        display: flex; align-items: center; justify-content: space-between; gap: 6px;
+        width: 100%; text-align: left; border: none; background: transparent;
+        padding: 10px 12px; font-size: 13.5px; font-weight: 600; color: var(--charcoal);
+        cursor: pointer; border-radius: var(--radius-sm); font-family: var(--font-brand);
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+      .sidebar-group-header svg { color: #ABB0B3; flex-shrink: 0; }
+      .sidebar-group-header:hover { background: #F7F8F9; }
+      .sidebar-group-header:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+      .sidebar-group-header.active { color: var(--blue-dark); }
+      .sidebar-subtabs { display: flex; flex-direction: column; padding-left: 8px; margin: 2px 0 6px; }
+      .sidebar-tab {
+        border: none; background: transparent; text-align: left; padding: 9px 12px;
+        font-size: 13px; font-weight: 500; color: #8A8D90; cursor: pointer;
+        border-radius: var(--radius-sm); font-family: var(--font-body);
+        transition: color 0.15s ease, background 0.15s ease;
+      }
+      .sidebar-tab:hover { color: var(--charcoal); background: #F7F8F9; }
+      .sidebar-tab:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+      .sidebar-tab.active { color: var(--blue-dark); background: #E6F8FE; font-weight: 600; }
+      .sidebar-tab-grupo {
+        font-family: var(--font-brand); font-size: 13.5px; font-weight: 600; color: var(--charcoal);
+      }
+      .sidebar-tab-grupo.active { color: var(--blue-dark); background: #E6F8FE; }
+
+      .content { padding: 22px; background: linear-gradient(180deg, #E1F4FC 0%, var(--bg) 380px); flex: 1; min-width: 0; }
       .stack { display: flex; flex-direction: column; gap: 18px; }
       .two-col { flex-direction: row; align-items: flex-start; flex-wrap: wrap; }
       .two-col > .panel { flex: 1 1 320px; }
@@ -6087,6 +6252,23 @@ function Styles() {
         .content { padding: 14px; }
         .kpi-grid { grid-template-columns: repeat(2, 1fr); }
         .modal { padding: 18px; border-radius: var(--radius-md); }
+
+        /* La barra lateral se vuelve un menú desplegable angosto: un botón
+           que muestra el bloque/tab activo, y al tocarlo se abre la lista
+           completa encima del contenido (en vez de ocupar espacio fijo al
+           lado, que en un teléfono dejaría muy poco lugar para el resto). */
+        .app-shell { flex-direction: column; position: relative; }
+        .sidebar-toggle-movil {
+          display: flex; align-items: center; gap: 8px; width: 100%;
+          background: var(--card); border: none; border-bottom: 1px solid var(--border-soft);
+          padding: 13px 16px; font-size: 13.5px; font-weight: 600; color: var(--charcoal);
+          cursor: pointer; font-family: var(--font-brand); text-align: left;
+        }
+        .sidebar {
+          display: none; width: 100%; border-right: none; border-bottom: 1px solid var(--border-soft);
+          box-shadow: var(--shadow-raised);
+        }
+        .sidebar.sidebar-abierto-movil { display: flex; }
       }
 
       /* ---------- Responsivo: teléfono angosto (≤480px), hasta ~360px ---------- */
