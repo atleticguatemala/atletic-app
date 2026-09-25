@@ -404,6 +404,75 @@ function juntarSesionesConEjercicios(filasSesiones, filasSesionEjercicios) {
   }));
 }
 
+// ---------- Equipos y competencias: resultados de partidos ----------
+function resultadoPartidoFromDb(r) {
+  return {
+    id: r.id,
+    eventoId: r.evento_id,
+    golesFavor: r.goles_favor,
+    golesContra: r.goles_contra,
+    observaciones: r.observaciones,
+    entrenadorId: r.entrenador_id,
+  };
+}
+function resultadoPartidoToDb(r) {
+  return {
+    evento_id: r.eventoId,
+    goles_favor: r.golesFavor === "" || r.golesFavor == null ? 0 : Number(r.golesFavor),
+    goles_contra: r.golesContra === "" || r.golesContra == null ? 0 : Number(r.golesContra),
+    observaciones: r.observaciones || null,
+  };
+}
+function golPartidoFromDb(r) {
+  return {
+    id: r.id,
+    resultadoId: r.resultado_id,
+    alumnoId: r.alumno_id,
+    alumnoNombre: r.alumno_nombre,
+    asistenciaAlumnoId: r.asistencia_alumno_id,
+    asistenciaNombre: r.asistencia_nombre,
+    minuto: r.minuto,
+  };
+}
+function tarjetaPartidoFromDb(r) {
+  return {
+    id: r.id,
+    resultadoId: r.resultado_id,
+    alumnoId: r.alumno_id,
+    alumnoNombre: r.alumno_nombre,
+    tipo: r.tipo,
+    minuto: r.minuto,
+  };
+}
+// Junta cada resultado con sus goles y tarjetas (llegan por separado, de
+// partido_goles y partido_tarjetas).
+function juntarResultadosConDetalle(filasResultados, filasGoles, filasTarjetas) {
+  const golesPor = {};
+  filasGoles.map(golPartidoFromDb).forEach((g) => {
+    if (!golesPor[g.resultadoId]) golesPor[g.resultadoId] = [];
+    golesPor[g.resultadoId].push(g);
+  });
+  const tarjetasPor = {};
+  filasTarjetas.map(tarjetaPartidoFromDb).forEach((t) => {
+    if (!tarjetasPor[t.resultadoId]) tarjetasPor[t.resultadoId] = [];
+    tarjetasPor[t.resultadoId].push(t);
+  });
+  return filasResultados.map(resultadoPartidoFromDb).map((r) => ({
+    ...r,
+    goles: golesPor[r.id] || [],
+    tarjetas: tarjetasPor[r.id] || [],
+  }));
+}
+function resultadoPartidoTipo(r) {
+  if (Number(r.golesFavor) > Number(r.golesContra)) return "ganado";
+  if (Number(r.golesFavor) < Number(r.golesContra)) return "perdido";
+  return "empate";
+}
+function resultadoPartidoLabel(r) {
+  const t = resultadoPartidoTipo(r);
+  return t === "ganado" ? "Ganado" : t === "perdido" ? "Perdido" : "Empate";
+}
+
 // Genera las fechas de las repeticiones de un evento (incluida la
 // primera), desde "fecha" hasta "hasta" (incluida), según "frecuencia".
 // Tope de 52 fechas como protección — nadie necesita repetir un evento
@@ -1005,6 +1074,7 @@ function PanelEntrenador({ perfil, onLogout }) {
   const [eventos, setEventos] = useState([]);
   const [ejercicios, setEjercicios] = useState([]);
   const [sesiones, setSesiones] = useState([]);
+  const [resultados, setResultados] = useState([]);
   const [loading, setLoading] = useState(true);
   const [marcandoIds, setMarcandoIds] = useState(() => new Set());
   const [toast, setToast] = useState(null);
@@ -1013,6 +1083,8 @@ function PanelEntrenador({ perfil, onLogout }) {
   const [confirmDeleteEjercicio, setConfirmDeleteEjercicio] = useState(null);
   const [sesionModal, setSesionModal] = useState(null);
   const [confirmDeleteSesion, setConfirmDeleteSesion] = useState(null);
+  const [resultadoModal, setResultadoModal] = useState(null); // { evento, resultado } | null
+  const [confirmDeleteResultado, setConfirmDeleteResultado] = useState(null);
 
   const enviandoRef = React.useRef(false);
   const [enviando, setEnviando] = useState(false);
@@ -1033,19 +1105,23 @@ function PanelEntrenador({ perfil, onLogout }) {
   }
 
   async function cargar() {
-    const [a, s, ev, ej, se, sej] = await Promise.all([
+    const [a, s, ev, ej, se, sej, rp, pg, pt] = await Promise.all([
       supabase.rpc("alumnos_para_asistencia"),
       supabase.from("asistencias").select("*").order("fecha", { ascending: false }),
       supabase.rpc("eventos_para_entrenador"),
       supabase.from("ejercicios").select("*").order("nombre"),
       supabase.from("sesiones").select("*").order("fecha", { ascending: false }),
       supabase.from("sesion_ejercicios").select("*"),
+      supabase.from("resultados_partido").select("*"),
+      supabase.from("partido_goles").select("*"),
+      supabase.from("partido_tarjetas").select("*"),
     ]);
     setAlumnos(a.data || []);
     setAsistencias((s.data || []).map(asistenciaFromDb));
     setEventos((ev.data || []).map(eventoFromDb));
     setEjercicios((ej.data || []).map(ejercicioFromDb));
     setSesiones(juntarSesionesConEjercicios(se.data || [], sej.data || []));
+    setResultados(juntarResultadosConDetalle(rp.data || [], pg.data || [], pt.data || []));
   }
 
   // Guarda un ejercicio de la biblioteca: si trae id, lo actualiza; si no,
@@ -1153,6 +1229,88 @@ function PanelEntrenador({ perfil, onLogout }) {
     }
   }
 
+  // Guarda el resultado de un partido: la fila de "resultados_partido" (a
+  // nombre de este entrenador) y, aparte, reemplaza TODOS sus goles y
+  // tarjetas por la lista actual del formulario.
+  async function guardarResultado(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = resultadoPartidoToDb(data);
+      let resultadoId = data.id;
+      if (esNuevo) {
+        const { data: fila, error } = await supabase
+          .from("resultados_partido")
+          .insert([{ ...payload, entrenador_id: perfil.id }])
+          .select()
+          .single();
+        if (error || !fila) {
+          showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+          return;
+        }
+        resultadoId = fila.id;
+      } else {
+        const { error } = await supabase.from("resultados_partido").update(payload).eq("id", resultadoId);
+        if (error) {
+          showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+          return;
+        }
+        await supabase.from("partido_goles").delete().eq("resultado_id", resultadoId);
+        await supabase.from("partido_tarjetas").delete().eq("resultado_id", resultadoId);
+      }
+      if (data.goles.length) {
+        const filas = data.goles.map((g) => ({
+          resultado_id: resultadoId,
+          alumno_id: g.alumnoId || null,
+          alumno_nombre: g.alumnoNombre,
+          asistencia_alumno_id: g.asistenciaAlumnoId || null,
+          asistencia_nombre: g.asistenciaNombre || null,
+          minuto: g.minuto === "" || g.minuto == null ? null : Number(g.minuto),
+        }));
+        const { error: errGoles } = await supabase.from("partido_goles").insert(filas);
+        if (errGoles) {
+          showToast("El resultado se guardó, pero no se pudieron guardar los goles. Vuelve a intentarlo.", true);
+          return;
+        }
+      }
+      if (data.tarjetas.length) {
+        const filas = data.tarjetas.map((t) => ({
+          resultado_id: resultadoId,
+          alumno_id: t.alumnoId || null,
+          alumno_nombre: t.alumnoNombre,
+          tipo: t.tipo,
+          minuto: t.minuto === "" || t.minuto == null ? null : Number(t.minuto),
+        }));
+        const { error: errTarjetas } = await supabase.from("partido_tarjetas").insert(filas);
+        if (errTarjetas) {
+          showToast("El resultado se guardó, pero no se pudieron guardar las tarjetas. Vuelve a intentarlo.", true);
+          return;
+        }
+      }
+      await cargar();
+      setResultadoModal(null);
+      showToast(esNuevo ? "Resultado registrado." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarResultado(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("resultados_partido").delete().eq("id", id);
+      setConfirmDeleteResultado(null);
+      if (!error) {
+        setResultados((prev) => prev.filter((r) => r.id !== id));
+        showToast("Resultado eliminado.");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -1165,6 +1323,9 @@ function PanelEntrenador({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "sesiones" }, () => cargar())
       .on("postgres_changes", { event: "*", schema: "public", table: "sesion_ejercicios" }, () => cargar())
       .on("postgres_changes", { event: "*", schema: "public", table: "ejercicios" }, () => cargar())
+      .on("postgres_changes", { event: "*", schema: "public", table: "resultados_partido" }, () => cargar())
+      .on("postgres_changes", { event: "*", schema: "public", table: "partido_goles" }, () => cargar())
+      .on("postgres_changes", { event: "*", schema: "public", table: "partido_tarjetas" }, () => cargar())
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -1241,6 +1402,7 @@ function PanelEntrenador({ perfil, onLogout }) {
           { key: "calendario", label: "Calendario" },
           { key: "sesiones", label: "Sesiones" },
           { key: "biblioteca", label: "Biblioteca" },
+          { key: "resultados", label: "Partidos" },
         ].map((t) => (
           <button
             key={t.key}
@@ -1286,6 +1448,16 @@ function PanelEntrenador({ perfil, onLogout }) {
                 onEliminar={(e) => setConfirmDeleteEjercicio(e)}
               />
             )}
+            {tab === "resultados" && (
+              <ResultadosPartidosView
+                eventos={eventos}
+                resultados={resultados}
+                mostrarEntrenador={false}
+                onRegistrar={(evento) => setResultadoModal({ evento, resultado: null })}
+                onEditar={(evento, resultado) => setResultadoModal({ evento, resultado })}
+                onEliminar={(r) => setConfirmDeleteResultado(r)}
+              />
+            )}
           </>
         )}
       </main>
@@ -1327,6 +1499,32 @@ function PanelEntrenador({ perfil, onLogout }) {
           danger
           onConfirm={() => eliminarSesion(confirmDeleteSesion.id)}
           onCancel={() => setConfirmDeleteSesion(null)}
+          disabled={enviando}
+        />
+      )}
+
+      {resultadoModal !== null && (
+        <ResultadoModal
+          evento={resultadoModal.evento}
+          initial={resultadoModal.resultado}
+          alumnosDisponibles={
+            (resultadoModal.evento.categorias || []).length
+              ? alumnos.filter((a) => resultadoModal.evento.categorias.includes(a.categoria))
+              : alumnos
+          }
+          onSave={guardarResultado}
+          onCancel={() => setResultadoModal(null)}
+          enviando={enviando}
+        />
+      )}
+      {confirmDeleteResultado && (
+        <ConfirmDialog
+          title="¿Eliminar este resultado?"
+          body="Se borran también los goleadores y tarjetas registrados para este partido. No podrá deshacerse."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarResultado(confirmDeleteResultado.id)}
+          onCancel={() => setConfirmDeleteResultado(null)}
           disabled={enviando}
         />
       )}
@@ -1568,6 +1766,7 @@ const GRUPOS_NAV_ADMIN = [
     tabs: [
       { key: "sesiones", label: "Sesiones" },
       { key: "biblioteca", label: "Biblioteca" },
+      { key: "resultados", label: "Partidos" },
     ],
   },
   { key: "staff", label: "Staff", tabs: [{ key: "staff", label: "Staff" }] },
@@ -2244,6 +2443,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [staff, setStaff] = useState([]);
   const [ejercicios, setEjercicios] = useState([]);
   const [sesiones, setSesiones] = useState([]);
+  const [resultados, setResultados] = useState([]);
   const [tab, setTab] = useState("resumen");
   const [openGroup, setOpenGroup] = useState("resumen"); // grupo de la barra lateral abierto
   const [toast, setToast] = useState(null);
@@ -2259,6 +2459,8 @@ function PanelAdmin({ perfil, onLogout }) {
   const [confirmDeleteEjercicio, setConfirmDeleteEjercicio] = useState(null);
   const [sesionModal, setSesionModal] = useState(null);
   const [confirmDeleteSesion, setConfirmDeleteSesion] = useState(null);
+  const [resultadoModal, setResultadoModal] = useState(null); // { evento, resultado } | null
+  const [confirmDeleteResultado, setConfirmDeleteResultado] = useState(null);
 
   // Cambia de tab abriendo también el grupo de la barra lateral al que
   // pertenece — para los accesos directos (ej. botones del Resumen) que no
@@ -2316,7 +2518,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [reloading, setReloading] = useState(false);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, c, g, j, s, l, ev, st, ej, se, sej] = await Promise.all([
+    const [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("cargos").select("*").order("created_at", { ascending: false }),
@@ -2329,6 +2531,9 @@ function PanelAdmin({ perfil, onLogout }) {
       supabase.from("ejercicios").select("*").order("nombre"),
       supabase.from("sesiones").select("*").order("fecha", { ascending: false }),
       supabase.from("sesion_ejercicios").select("*"),
+      supabase.from("resultados_partido").select("*"),
+      supabase.from("partido_goles").select("*"),
+      supabase.from("partido_tarjetas").select("*"),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -2341,8 +2546,9 @@ function PanelAdmin({ perfil, onLogout }) {
     setStaff((st.data || []).map(perfilStaffFromDb));
     setEjercicios((ej.data || []).map(ejercicioFromDb));
     setSesiones(juntarSesionesConEjercicios(se.data || [], sej.data || []));
+    setResultados(juntarResultadosConDetalle(rp.data || [], pg.data || [], pt.data || []));
 
-    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej].some((r) => r.error);
+    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt].some((r) => r.error);
     if (algunFallo) {
       showToast(
         "No se pudo cargar toda tu información (revisa tu conexión). Dale a \"Recargar\" para intentar de nuevo.",
@@ -2371,6 +2577,9 @@ function PanelAdmin({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "ejercicios" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "sesiones" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "sesion_ejercicios" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "resultados_partido" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "partido_goles" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "partido_tarjetas" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -2759,6 +2968,88 @@ function PanelAdmin({ perfil, onLogout }) {
       if (!error) {
         setSesiones((prev) => prev.filter((s) => s.id !== id));
         showToast("Sesión eliminada.");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  // Guarda el resultado de un partido (a tu propio nombre, como "quién lo
+  // registró") y, aparte, reemplaza TODOS sus goles y tarjetas por la lista
+  // actual del formulario.
+  async function guardarResultado(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = resultadoPartidoToDb(data);
+      let resultadoId = data.id;
+      if (esNuevo) {
+        const { data: fila, error } = await supabase
+          .from("resultados_partido")
+          .insert([{ ...payload, entrenador_id: perfil.id }])
+          .select()
+          .single();
+        if (error || !fila) {
+          showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+          return;
+        }
+        resultadoId = fila.id;
+      } else {
+        const { error } = await supabase.from("resultados_partido").update(payload).eq("id", resultadoId);
+        if (error) {
+          showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+          return;
+        }
+        await supabase.from("partido_goles").delete().eq("resultado_id", resultadoId);
+        await supabase.from("partido_tarjetas").delete().eq("resultado_id", resultadoId);
+      }
+      if (data.goles.length) {
+        const filas = data.goles.map((g) => ({
+          resultado_id: resultadoId,
+          alumno_id: g.alumnoId || null,
+          alumno_nombre: g.alumnoNombre,
+          asistencia_alumno_id: g.asistenciaAlumnoId || null,
+          asistencia_nombre: g.asistenciaNombre || null,
+          minuto: g.minuto === "" || g.minuto == null ? null : Number(g.minuto),
+        }));
+        const { error: errGoles } = await supabase.from("partido_goles").insert(filas);
+        if (errGoles) {
+          showToast("El resultado se guardó, pero no se pudieron guardar los goles. Vuelve a intentarlo.", true);
+          return;
+        }
+      }
+      if (data.tarjetas.length) {
+        const filas = data.tarjetas.map((t) => ({
+          resultado_id: resultadoId,
+          alumno_id: t.alumnoId || null,
+          alumno_nombre: t.alumnoNombre,
+          tipo: t.tipo,
+          minuto: t.minuto === "" || t.minuto == null ? null : Number(t.minuto),
+        }));
+        const { error: errTarjetas } = await supabase.from("partido_tarjetas").insert(filas);
+        if (errTarjetas) {
+          showToast("El resultado se guardó, pero no se pudieron guardar las tarjetas. Vuelve a intentarlo.", true);
+          return;
+        }
+      }
+      await cargarDatos({ silent: true });
+      setResultadoModal(null);
+      showToast(esNuevo ? "Resultado registrado." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarResultado(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("resultados_partido").delete().eq("id", id);
+      setConfirmDeleteResultado(null);
+      if (!error) {
+        setResultados((prev) => prev.filter((r) => r.id !== id));
+        showToast("Resultado eliminado.");
       } else {
         showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
       }
@@ -3399,6 +3690,18 @@ function PanelAdmin({ perfil, onLogout }) {
                 onEliminar={(e) => setConfirmDeleteEjercicio(e)}
               />
             )}
+
+            {tab === "resultados" && (
+              <ResultadosPartidosView
+                eventos={eventos}
+                resultados={resultados}
+                staffNombre={(id) => (staff.find((p) => p.id === id) || {}).nombre}
+                mostrarEntrenador
+                onRegistrar={(evento) => setResultadoModal({ evento, resultado: null })}
+                onEditar={(evento, resultado) => setResultadoModal({ evento, resultado })}
+                onEliminar={(r) => setConfirmDeleteResultado(r)}
+              />
+            )}
           </>
         )}
         </main>
@@ -3452,6 +3755,32 @@ function PanelAdmin({ perfil, onLogout }) {
           danger
           onConfirm={() => eliminarSesion(confirmDeleteSesion.id)}
           onCancel={() => setConfirmDeleteSesion(null)}
+          disabled={enviando}
+        />
+      )}
+
+      {resultadoModal !== null && (
+        <ResultadoModal
+          evento={resultadoModal.evento}
+          initial={resultadoModal.resultado}
+          alumnosDisponibles={
+            (resultadoModal.evento.categorias || []).length
+              ? alumnos.filter((a) => resultadoModal.evento.categorias.includes(a.categoria))
+              : alumnos
+          }
+          onSave={guardarResultado}
+          onCancel={() => setResultadoModal(null)}
+          enviando={enviando}
+        />
+      )}
+      {confirmDeleteResultado && (
+        <ConfirmDialog
+          title="¿Eliminar este resultado?"
+          body="Se borran también los goleadores y tarjetas registrados para este partido. No podrá deshacerse."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarResultado(confirmDeleteResultado.id)}
+          onCancel={() => setConfirmDeleteResultado(null)}
           disabled={enviando}
         />
       )}
@@ -5194,6 +5523,351 @@ function SesionModal({ initial, categoriasDisponibles, ejerciciosDisponibles, en
               </div>
             )}
           </div>
+        </div>
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onCancel} disabled={enviando}>
+            Cancelar
+          </button>
+          <button className="btn-primary" onClick={handleSubmit} disabled={enviando}>
+            {enviando ? "Guardando…" : "Guardar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Lista de partidos (eventos tipo "partido" del calendario) con su
+// resultado, si ya se registró. Se usa tanto en el panel del entrenador
+// (solo los de sus categorías, vía eventos_para_entrenador) como en el de
+// Admin (todos, con la columna de quién lo registró). Un partido sin
+// resultado todavía muestra el botón "Registrar resultado" en vez de
+// editar/eliminar.
+function ResultadosPartidosView({ eventos, resultados, staffNombre, mostrarEntrenador, onRegistrar, onEditar, onEliminar }) {
+  const [filtroCategoria, setFiltroCategoria] = useState("");
+
+  const resultadoPorEvento = useMemo(() => {
+    const m = {};
+    resultados.forEach((r) => {
+      m[r.eventoId] = r;
+    });
+    return m;
+  }, [resultados]);
+
+  const categoriasDisponibles = useMemo(() => {
+    const set = new Set();
+    eventos.filter((e) => e.tipo === "partido").forEach((e) => (e.categorias || []).forEach((c) => set.add(c)));
+    return Array.from(set).sort();
+  }, [eventos]);
+
+  const partidos = useMemo(() => {
+    return eventos
+      .filter((e) => e.tipo === "partido")
+      .filter((e) => (filtroCategoria ? (e.categorias || []).includes(filtroCategoria) : true))
+      .sort((a, b) => (b.fecha + (b.hora || "")).localeCompare(a.fecha + (a.hora || "")));
+  }, [eventos, filtroCategoria]);
+
+  return (
+    <div className="stack">
+      <div className="toolbar">
+        <div />
+        <select value={filtroCategoria} onChange={(e) => setFiltroCategoria(e.target.value)}>
+          <option value="">Todas las categorías</option>
+          {categoriasDisponibles.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {partidos.length === 0 ? (
+        <div className="empty">
+          No hay partidos agendados en el calendario todavía. Agrégalos desde la pestaña "Calendario" como evento tipo "Partido".
+        </div>
+      ) : (
+        partidos.map((evento) => {
+          const resultado = resultadoPorEvento[evento.id];
+          return (
+            <div key={evento.id} className="panel evento-fila">
+              <div className="evento-fila-info">
+                <div className="evento-fila-titulo">
+                  {evento.titulo}
+                  {evento.rival ? " vs " + evento.rival : ""}
+                </div>
+                <div className="muted" style={{ fontSize: 13 }}>
+                  {formatDiaLargo(evento.fecha)}
+                  {(evento.categorias || []).length ? " · " + evento.categorias.join(", ") : ""}
+                  {mostrarEntrenador && resultado ? " · " + (staffNombre(resultado.entrenadorId) || "—") : ""}
+                </div>
+                {resultado ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                    <span style={{ fontWeight: 700, fontSize: 16 }}>
+                      {resultado.golesFavor} - {resultado.golesContra}
+                    </span>
+                    <span className={"resultado-pill resultado-" + resultadoPartidoTipo(resultado)}>
+                      {resultadoPartidoLabel(resultado)}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+                    Sin resultado registrado
+                  </div>
+                )}
+              </div>
+              <div className="actions">
+                {resultado ? (
+                  <>
+                    <button className="icon-btn" onClick={() => onEditar(evento, resultado)} aria-label="Editar">
+                      <Pencil size={15} />
+                    </button>
+                    <button className="icon-btn" onClick={() => onEliminar(resultado)} aria-label="Eliminar">
+                      <Trash2 size={15} />
+                    </button>
+                  </>
+                ) : (
+                  <button className="btn-secondary" onClick={() => onRegistrar(evento)}>
+                    Registrar resultado
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+// Formulario de resultado de un partido: marcador, goleadores (con
+// asistencia opcional) y tarjetas. "alumnosDisponibles" es la lista de
+// jugadores de donde elegir (ya viene filtrada por categoría del partido).
+function ResultadoModal({ evento, initial, alumnosDisponibles, onSave, onCancel, enviando }) {
+  const [form, setForm] = useState({
+    id: (initial && initial.id) || null,
+    eventoId: evento.id,
+    golesFavor: initial ? initial.golesFavor : 0,
+    golesContra: initial ? initial.golesContra : 0,
+    observaciones: (initial && initial.observaciones) || "",
+    goles: ((initial && initial.goles) || []).map((g) => ({ ...g })),
+    tarjetas: ((initial && initial.tarjetas) || []).map((t) => ({ ...t })),
+  });
+  const [golAAgregar, setGolAAgregar] = useState("");
+  const [asistenciaAAgregar, setAsistenciaAAgregar] = useState("");
+  const [tarjetaAAgregar, setTarjetaAAgregar] = useState("");
+  const [tarjetaTipo, setTarjetaTipo] = useState("amarilla");
+
+  function agregarGol() {
+    if (!golAAgregar) return;
+    const al = alumnosDisponibles.find((a) => a.id === golAAgregar);
+    if (!al) return;
+    const asist = asistenciaAAgregar ? alumnosDisponibles.find((a) => a.id === asistenciaAAgregar) : null;
+    setForm((prev) => ({
+      ...prev,
+      goles: [
+        ...prev.goles,
+        {
+          alumnoId: al.id,
+          alumnoNombre: al.nombre,
+          asistenciaAlumnoId: asist ? asist.id : null,
+          asistenciaNombre: asist ? asist.nombre : null,
+          minuto: "",
+        },
+      ],
+    }));
+    setGolAAgregar("");
+    setAsistenciaAAgregar("");
+  }
+  function quitarGol(idx) {
+    setForm((prev) => ({ ...prev, goles: prev.goles.filter((_, i) => i !== idx) }));
+  }
+  function actualizarGolMinuto(idx, minuto) {
+    setForm((prev) => {
+      const lista = [...prev.goles];
+      lista[idx] = { ...lista[idx], minuto };
+      return { ...prev, goles: lista };
+    });
+  }
+
+  function agregarTarjeta() {
+    if (!tarjetaAAgregar) return;
+    const al = alumnosDisponibles.find((a) => a.id === tarjetaAAgregar);
+    if (!al) return;
+    setForm((prev) => ({
+      ...prev,
+      tarjetas: [...prev.tarjetas, { alumnoId: al.id, alumnoNombre: al.nombre, tipo: tarjetaTipo, minuto: "" }],
+    }));
+    setTarjetaAAgregar("");
+  }
+  function quitarTarjeta(idx) {
+    setForm((prev) => ({ ...prev, tarjetas: prev.tarjetas.filter((_, i) => i !== idx) }));
+  }
+  function actualizarTarjetaMinuto(idx, minuto) {
+    setForm((prev) => {
+      const lista = [...prev.tarjetas];
+      lista[idx] = { ...lista[idx], minuto };
+      return { ...prev, tarjetas: lista };
+    });
+  }
+
+  function handleSubmit(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    onSave(form);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>
+            Resultado: {evento.titulo}
+            {evento.rival ? " vs " + evento.rival : ""}
+          </h3>
+          <button className="icon-btn" onClick={onCancel} aria-label="Cerrar">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="form">
+          <div className="muted" style={{ fontSize: 13 }}>
+            {formatDiaLargo(evento.fecha)}
+          </div>
+          <div className="form-row">
+            <label>
+              Goles a favor
+              <input
+                type="number"
+                min="0"
+                value={form.golesFavor}
+                onChange={(e) => setForm({ ...form, golesFavor: e.target.value })}
+              />
+            </label>
+            <label>
+              Goles en contra
+              <input
+                type="number"
+                min="0"
+                value={form.golesContra}
+                onChange={(e) => setForm({ ...form, golesContra: e.target.value })}
+              />
+            </label>
+          </div>
+
+          <div>
+            <div className="form-section-label">Goleadores ({form.goles.length})</div>
+            {form.goles.length === 0 && (
+              <div className="empty" style={{ padding: 14 }}>
+                Todavía no agregas ningún gol.
+              </div>
+            )}
+            <div className="stack" style={{ gap: 8 }}>
+              {form.goles.map((g, idx) => (
+                <div key={idx} className="panel" style={{ padding: 10 }}>
+                  <div className="form-row" style={{ alignItems: "center", flexWrap: "nowrap" }}>
+                    <div style={{ flex: 2, fontWeight: 600 }}>
+                      {g.alumnoNombre}
+                      {g.asistenciaNombre ? <span className="muted"> · asist. {g.asistenciaNombre}</span> : null}
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      style={{ flex: "0 0 90px" }}
+                      value={g.minuto}
+                      onChange={(e) => actualizarGolMinuto(idx, e.target.value)}
+                      placeholder="min"
+                    />
+                    <button type="button" className="icon-btn danger" onClick={() => quitarGol(idx)} aria-label="Quitar">
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {alumnosDisponibles.length === 0 ? (
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+                No hay alumnos disponibles para elegir (revisa la categoría del partido).
+              </div>
+            ) : (
+              <div className="form-row" style={{ marginTop: 10 }}>
+                <select value={golAAgregar} onChange={(e) => setGolAAgregar(e.target.value)}>
+                  <option value="">Elige quién anotó…</option>
+                  {alumnosDisponibles.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.nombre}
+                    </option>
+                  ))}
+                </select>
+                <select value={asistenciaAAgregar} onChange={(e) => setAsistenciaAAgregar(e.target.value)}>
+                  <option value="">Sin asistencia</option>
+                  {alumnosDisponibles.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.nombre}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className="btn-secondary" onClick={agregarGol} disabled={!golAAgregar}>
+                  <Plus size={15} /> Agregar gol
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div className="form-section-label">Tarjetas ({form.tarjetas.length})</div>
+            {form.tarjetas.length === 0 && (
+              <div className="empty" style={{ padding: 14 }}>
+                No hay tarjetas registradas.
+              </div>
+            )}
+            <div className="stack" style={{ gap: 8 }}>
+              {form.tarjetas.map((t, idx) => (
+                <div key={idx} className="panel" style={{ padding: 10 }}>
+                  <div className="form-row" style={{ alignItems: "center", flexWrap: "nowrap" }}>
+                    <span className={"tarjeta-pill tarjeta-" + t.tipo}>{t.tipo === "amarilla" ? "Amarilla" : "Roja"}</span>
+                    <div style={{ flex: 2, fontWeight: 600 }}>{t.alumnoNombre}</div>
+                    <input
+                      type="number"
+                      min="0"
+                      style={{ flex: "0 0 90px" }}
+                      value={t.minuto}
+                      onChange={(e) => actualizarTarjetaMinuto(idx, e.target.value)}
+                      placeholder="min"
+                    />
+                    <button type="button" className="icon-btn danger" onClick={() => quitarTarjeta(idx)} aria-label="Quitar">
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {alumnosDisponibles.length > 0 && (
+              <div className="form-row" style={{ marginTop: 10 }}>
+                <select value={tarjetaAAgregar} onChange={(e) => setTarjetaAAgregar(e.target.value)}>
+                  <option value="">Elige jugador…</option>
+                  {alumnosDisponibles.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.nombre}
+                    </option>
+                  ))}
+                </select>
+                <select value={tarjetaTipo} onChange={(e) => setTarjetaTipo(e.target.value)}>
+                  <option value="amarilla">Amarilla</option>
+                  <option value="roja">Roja</option>
+                </select>
+                <button type="button" className="btn-secondary" onClick={agregarTarjeta} disabled={!tarjetaAAgregar}>
+                  <Plus size={15} /> Agregar tarjeta
+                </button>
+              </div>
+            )}
+          </div>
+
+          <label>
+            Observaciones (opcional)
+            <textarea
+              rows={2}
+              value={form.observaciones}
+              onChange={(e) => setForm({ ...form, observaciones: e.target.value })}
+            />
+          </label>
         </div>
         <div className="modal-actions">
           <button className="btn-secondary" onClick={onCancel} disabled={enviando}>
@@ -7472,6 +8146,15 @@ function Styles() {
       .evento-tipo-entrenamiento { background: #E7F7F1; color: #158F63; }
       .evento-tipo-suspension { background: #F1EAFB; color: #6B3FC1; }
       .evento-tipo-clase_prueba { background: #FCF1DD; color: #B4790A; }
+
+      /* Resultados de partidos (Equipos y competencias) */
+      .resultado-pill { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; padding: 2px 8px; border-radius: 999px; }
+      .resultado-ganado { background: #E7F7F1; color: #158F63; }
+      .resultado-perdido { background: #FBEAE9; color: #C13F3B; }
+      .resultado-empate { background: #F1EFEA; color: #6A6D70; }
+      .tarjeta-pill { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; padding: 2px 8px; border-radius: 999px; flex-shrink: 0; }
+      .tarjeta-amarilla { background: #FCF1DD; color: #B4790A; }
+      .tarjeta-roja { background: #FBEAE9; color: #C13F3B; }
 
       /* Cartera / recordatorios de pago */
       .cartera-fila { display: flex; align-items: center; gap: 14px; padding: 12px 14px; flex-wrap: wrap; }
