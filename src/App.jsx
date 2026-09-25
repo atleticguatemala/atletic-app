@@ -518,6 +518,32 @@ function juntarCampeonatosConInscripciones(filasCampeonatos, filasInscripciones)
   }));
 }
 
+// ---------- Inventario ----------
+function inventarioFromDb(r) {
+  return {
+    id: r.id,
+    nombre: r.nombre,
+    categoria: r.categoria,
+    cantidadTotal: Number(r.cantidad_total) || 0,
+    cantidadDanada: Number(r.cantidad_danada) || 0,
+    sede: r.sede,
+    notas: r.notas,
+  };
+}
+function inventarioToDb(i) {
+  const total = Number(i.cantidadTotal) || 0;
+  let danada = Number(i.cantidadDanada) || 0;
+  if (danada > total) danada = total; // nunca puede haber más dañadas que el total
+  return {
+    nombre: i.nombre,
+    categoria: i.categoria || "Otro",
+    cantidad_total: total,
+    cantidad_danada: danada,
+    sede: i.sede || null,
+    notas: i.notas || null,
+  };
+}
+
 // Genera las fechas de las repeticiones de un evento (incluida la
 // primera), desde "fecha" hasta "hasta" (incluida), según "frecuencia".
 // Tope de 52 fechas como protección — nadie necesita repetir un evento
@@ -871,6 +897,22 @@ const PIERNA_DOMINANTE = ["Derecha", "Izquierda", "Ambas"];
 const TALLAS_UNIFORME = ["4", "6", "8", "10", "12", "14", "16", "XS", "S", "M", "L", "XL"];
 
 const CATEGORIAS_GASTO = ["Cancha", "Pago a entrenador", "Equipo y material", "Publicidad", "Otro"];
+
+const CATEGORIAS_INVENTARIO = [
+  "Balones",
+  "Conos y agilidad",
+  "Petos",
+  "Arcos portátiles",
+  "Mallas y redes",
+  "Botiquín",
+  "Uniformes de entrenamiento",
+  "Otro",
+];
+
+// Sedes de la academia (las mismas del sitio público). Se usa como campo
+// opcional en Inventario para anotar dónde está cada artículo; un artículo
+// sin sede se entiende como de uso general/compartido entre sedes.
+const SEDES = ["Hacienda Real", "Colegio Discovery"];
 
 // Motivos de ausencia: opciones fijas que pidió el dueño, en este orden
 // exacto ("Otro" se agregó como comodín para casos que no encajen en las
@@ -1795,6 +1837,7 @@ const GRUPOS_NAV_ADMIN = [
       { key: "alumnos", label: "Alumnos" },
       { key: "asistencia", label: "Asistencia" },
       { key: "uniformes", label: "Uniformes" },
+      { key: "inventario", label: "Inventario" },
     ],
   },
   {
@@ -1827,6 +1870,7 @@ const GRUPOS_NAV_ADMINISTRATIVO = [
       { key: "alumnos", label: "Alumnos" },
       { key: "asistencia", label: "Asistencia" },
       { key: "uniformes", label: "Uniformes" },
+      { key: "inventario", label: "Inventario" },
     ],
   },
   {
@@ -1942,6 +1986,8 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [cargos, setCargos] = useState([]);
   const [asistencias, setAsistencias] = useState([]);
   const [eventos, setEventos] = useState([]);
+  const [inventario, setInventario] = useState([]);
+  const [inventarioModal, setInventarioModal] = useState(null); // null | {} (nuevo) | artículo (editar)
   const [tab, setTab] = useState("crm");
   const [openGroup, setOpenGroup] = useState("crm"); // grupo de la barra lateral abierto
   const [toast, setToast] = useState(null);
@@ -1987,7 +2033,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [confirmDeleteLead, setConfirmDeleteLead] = useState(null);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, l, c, s, ev, cp, ci] = await Promise.all([
+    const [a, p, l, c, s, ev, cp, ci, inv] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("leads").select("*").order("created_at", { ascending: false }),
@@ -1996,6 +2042,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
       supabase.from("eventos").select("*").order("fecha", { ascending: true }),
       supabase.from("campeonatos").select("*").order("fecha", { ascending: false }),
       supabase.from("campeonato_inscripciones").select("*"),
+      supabase.from("inventario").select("*").order("nombre"),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -2004,6 +2051,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
     setAsistencias((s.data || []).map(asistenciaFromDb));
     setEventos((ev.data || []).map(eventoFromDb));
     setCampeonatos(juntarCampeonatosConInscripciones(cp.data || [], ci.data || []));
+    setInventario((inv.data || []).map(inventarioFromDb));
     if (!silent && !a.error && !p.error && !l.error) {
       showToast(`Datos actualizados: ${(a.data || []).length} alumnos, ${(l.data || []).length} leads.`);
     }
@@ -2025,6 +2073,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "cargos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "asistencias" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "eventos" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "inventario" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -2097,6 +2146,26 @@ function PanelAdministrativo({ perfil, onLogout }) {
 
   function noAutorizado() {
     showToast("No tienes permiso para eso. Pídele a un administrador.", true);
+  }
+
+  async function guardarInventario(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = inventarioToDb(data);
+      const { error } = esNuevo
+        ? await supabase.from("inventario").insert([payload])
+        : await supabase.from("inventario").update(payload).eq("id", data.id);
+      if (error) {
+        showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+        return;
+      }
+      await cargarDatos({ silent: true });
+      setInventarioModal(null);
+      showToast(esNuevo ? "Artículo agregado." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
   }
 
   async function guardarCampeonato(data) {
@@ -2442,6 +2511,16 @@ function PanelAdministrativo({ perfil, onLogout }) {
               <UniformesView alumnosActivos={alumnosActivos} onMarcarEntregado={actualizarUniformeEntregado} />
             )}
 
+            {tab === "inventario" && (
+              <InventarioView
+                inventario={inventario}
+                puedeEliminar={false}
+                onNuevo={() => setInventarioModal({})}
+                onEditar={(i) => setInventarioModal(i)}
+                onEliminar={noAutorizado}
+              />
+            )}
+
             {tab === "calendario" && (
               <CalendarioView
                 eventos={eventos}
@@ -2483,6 +2562,15 @@ function PanelAdministrativo({ perfil, onLogout }) {
           initial={campeonatoModal}
           onSave={guardarCampeonato}
           onCancel={() => setCampeonatoModal(null)}
+          enviando={enviando}
+        />
+      )}
+
+      {inventarioModal !== null && (
+        <InventarioModal
+          initial={inventarioModal}
+          onSave={guardarInventario}
+          onCancel={() => setInventarioModal(null)}
           enviando={enviando}
         />
       )}
@@ -2600,6 +2688,9 @@ function PanelAdmin({ perfil, onLogout }) {
   const [campeonatos, setCampeonatos] = useState([]);
   const [campeonatoModal, setCampeonatoModal] = useState(null); // null | {} (nuevo) | campeonato (editar)
   const [confirmDeleteCampeonato, setConfirmDeleteCampeonato] = useState(null);
+  const [inventario, setInventario] = useState([]);
+  const [inventarioModal, setInventarioModal] = useState(null); // null | {} (nuevo) | artículo (editar)
+  const [confirmDeleteInventario, setConfirmDeleteInventario] = useState(null);
 
   // Cambia de tab abriendo también el grupo de la barra lateral al que
   // pertenece — para los accesos directos (ej. botones del Resumen) que no
@@ -2657,7 +2748,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [reloading, setReloading] = useState(false);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci] = await Promise.all([
+    const [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("cargos").select("*").order("created_at", { ascending: false }),
@@ -2675,6 +2766,7 @@ function PanelAdmin({ perfil, onLogout }) {
       supabase.from("partido_tarjetas").select("*"),
       supabase.from("campeonatos").select("*").order("fecha", { ascending: false }),
       supabase.from("campeonato_inscripciones").select("*"),
+      supabase.from("inventario").select("*").order("nombre"),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -2689,8 +2781,9 @@ function PanelAdmin({ perfil, onLogout }) {
     setSesiones(juntarSesionesConEjercicios(se.data || [], sej.data || []));
     setResultados(juntarResultadosConDetalle(rp.data || [], pg.data || [], pt.data || []));
     setCampeonatos(juntarCampeonatosConInscripciones(cp.data || [], ci.data || []));
+    setInventario((inv.data || []).map(inventarioFromDb));
 
-    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci].some((r) => r.error);
+    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv].some((r) => r.error);
     if (algunFallo) {
       showToast(
         "No se pudo cargar toda tu información (revisa tu conexión). Dale a \"Recargar\" para intentar de nuevo.",
@@ -2724,6 +2817,7 @@ function PanelAdmin({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "partido_tarjetas" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "campeonatos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "campeonato_inscripciones" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "inventario" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -3234,6 +3328,42 @@ function PanelAdmin({ perfil, onLogout }) {
       if (!error) {
         setCampeonatos((prev) => prev.filter((c) => c.id !== id));
         showToast("Campeonato eliminado.");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function guardarInventario(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = inventarioToDb(data);
+      const { error } = esNuevo
+        ? await supabase.from("inventario").insert([payload])
+        : await supabase.from("inventario").update(payload).eq("id", data.id);
+      if (error) {
+        showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+        return;
+      }
+      await cargarDatos({ silent: true });
+      setInventarioModal(null);
+      showToast(esNuevo ? "Artículo agregado." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarInventario(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("inventario").delete().eq("id", id);
+      setConfirmDeleteInventario(null);
+      if (!error) {
+        setInventario((prev) => prev.filter((i) => i.id !== id));
+        showToast("Artículo eliminado.");
       } else {
         showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
       }
@@ -3842,6 +3972,16 @@ function PanelAdmin({ perfil, onLogout }) {
               <UniformesView alumnosActivos={alumnosActivos} onMarcarEntregado={actualizarUniformeEntregado} />
             )}
 
+            {tab === "inventario" && (
+              <InventarioView
+                inventario={inventario}
+                puedeEliminar
+                onNuevo={() => setInventarioModal({})}
+                onEditar={(i) => setInventarioModal(i)}
+                onEliminar={(i) => setConfirmDeleteInventario(i)}
+              />
+            )}
+
             {tab === "margen" && (
               <MargenView alumnosActivos={alumnosMensuales} totalGastosMes={totalGastosMes} monthLabelStr={monthLabel(currentMonthKey)} />
             )}
@@ -4034,6 +4174,26 @@ function PanelAdmin({ perfil, onLogout }) {
           danger
           onConfirm={() => eliminarCampeonato(confirmDeleteCampeonato.id)}
           onCancel={() => setConfirmDeleteCampeonato(null)}
+          disabled={enviando}
+        />
+      )}
+
+      {inventarioModal !== null && (
+        <InventarioModal
+          initial={inventarioModal}
+          onSave={guardarInventario}
+          onCancel={() => setInventarioModal(null)}
+          enviando={enviando}
+        />
+      )}
+      {confirmDeleteInventario && (
+        <ConfirmDialog
+          title={`¿Eliminar "${confirmDeleteInventario.nombre}"?`}
+          body="No podrá deshacerse."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarInventario(confirmDeleteInventario.id)}
+          onCancel={() => setConfirmDeleteInventario(null)}
           disabled={enviando}
         />
       )}
@@ -6402,6 +6562,247 @@ function CampeonatoModal({ initial, onSave, onCancel, enviando }) {
                 </label>
               ))}
             </div>
+          </div>
+          <label>
+            Notas (opcional)
+            <textarea rows={2} value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} />
+          </label>
+        </div>
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onCancel} disabled={enviando}>
+            Cancelar
+          </button>
+          <button className="btn-primary" onClick={handleSubmit} disabled={enviando}>
+            {enviando ? "Guardando…" : "Guardar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Inventario de equipo de la academia (balones, conos, petos, arcos,
+// botiquín, etc.) — separado del control de uniformes por alumno, que
+// sigue viviendo en la ficha de cada alumno. "Buen estado" se calcula
+// restando las dañadas del total, así nunca queda desincronizado.
+function InventarioView({ inventario, puedeEliminar, onNuevo, onEditar, onEliminar }) {
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroCategoria, setFiltroCategoria] = useState("");
+  const [filtroSede, setFiltroSede] = useState("");
+
+  const sedesDisponibles = useMemo(() => {
+    const set = new Set();
+    inventario.forEach((i) => i.sede && set.add(i.sede));
+    return Array.from(set).sort();
+  }, [inventario]);
+
+  const filtrados = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    return inventario
+      .filter((i) => (filtroCategoria ? i.categoria === filtroCategoria : true))
+      .filter((i) => (filtroSede ? i.sede === filtroSede : true))
+      .filter((i) => (q ? i.nombre.toLowerCase().includes(q) : true))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [inventario, busqueda, filtroCategoria, filtroSede]);
+
+  const totalArticulos = inventario.reduce((s, i) => s + i.cantidadTotal, 0);
+  const totalDanados = inventario.reduce((s, i) => s + i.cantidadDanada, 0);
+
+  return (
+    <div className="stack">
+      <div className="toolbar">
+        <div className="search-box">
+          <Search size={16} />
+          <input placeholder="Buscar artículo…" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+        </div>
+        <div className="toolbar-actions">
+          <select value={filtroCategoria} onChange={(e) => setFiltroCategoria(e.target.value)}>
+            <option value="">Todas las categorías</option>
+            {CATEGORIAS_INVENTARIO.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+          {sedesDisponibles.length > 0 && (
+            <select value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
+              <option value="">Todas las sedes</option>
+              {sedesDisponibles.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          )}
+          <button className="btn-primary" onClick={onNuevo}>
+            <Plus size={16} /> Agregar artículo
+          </button>
+        </div>
+      </div>
+
+      {inventario.length > 0 && (
+        <div className="muted" style={{ fontSize: 13 }}>
+          {totalArticulos} artículo{totalArticulos === 1 ? "" : "s"} en total
+          {totalDanados > 0 ? ` · ${totalDanados} en mal estado` : ""}
+        </div>
+      )}
+
+      {filtrados.length === 0 ? (
+        <div className="empty">
+          {inventario.length === 0
+            ? "Todavía no hay artículos en el inventario. Agrega el primero con el botón de arriba."
+            : "No hay artículos que coincidan."}
+        </div>
+      ) : (
+        <div className="panel">
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Artículo</th>
+                  <th>Categoría</th>
+                  <th className="num">Total</th>
+                  <th className="num">Buen estado</th>
+                  <th className="num">Dañado</th>
+                  <th>Sede</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.map((i) => {
+                  const buenEstado = Math.max(0, i.cantidadTotal - i.cantidadDanada);
+                  return (
+                    <tr key={i.id}>
+                      <td className="cell-title">{i.nombre}</td>
+                      <td>{i.categoria}</td>
+                      <td className="num">{i.cantidadTotal}</td>
+                      <td className="num">{buenEstado}</td>
+                      <td className="num">
+                        {i.cantidadDanada > 0 ? (
+                          <span className="badge" style={{ color: "#C13F3B", background: "#FBEAE9" }}>
+                            {i.cantidadDanada}
+                          </span>
+                        ) : (
+                          <span className="muted">0</span>
+                        )}
+                      </td>
+                      <td>{i.sede || <span className="muted">—</span>}</td>
+                      <td>
+                        <div className="actions">
+                          <button className="icon-btn" onClick={() => onEditar(i)} aria-label="Editar">
+                            <Pencil size={15} />
+                          </button>
+                          {puedeEliminar && (
+                            <button className="icon-btn" onClick={() => onEliminar(i)} aria-label="Eliminar">
+                              <Trash2 size={15} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InventarioModal({ initial, onSave, onCancel, enviando }) {
+  const [form, setForm] = useState({
+    id: initial.id || null,
+    nombre: initial.nombre || "",
+    categoria: initial.categoria || CATEGORIAS_INVENTARIO[0],
+    cantidadTotal: initial.cantidadTotal != null ? String(initial.cantidadTotal) : "",
+    cantidadDanada: initial.cantidadDanada != null ? String(initial.cantidadDanada) : "0",
+    sede: initial.sede || "",
+    notas: initial.notas || "",
+  });
+  const [error, setError] = useState(null);
+
+  function handleSubmit(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const total = Number(form.cantidadTotal);
+    const danada = Number(form.cantidadDanada);
+    const problemas = [];
+    if (!form.nombre.trim()) problemas.push("Escribe el nombre del artículo.");
+    if (form.cantidadTotal === "" || isNaN(total) || total < 0) problemas.push("Ingresa una cantidad total válida.");
+    if (form.cantidadDanada !== "" && (isNaN(danada) || danada < 0)) problemas.push("Ingresa una cantidad dañada válida.");
+    if (!isNaN(total) && !isNaN(danada) && danada > total) problemas.push("La cantidad dañada no puede ser mayor que el total.");
+    if (problemas.length > 0) {
+      setError(problemas.join(" "));
+      return;
+    }
+    setError(null);
+    onSave({ ...form, cantidadTotal: total, cantidadDanada: isNaN(danada) ? 0 : danada });
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{form.id ? "Editar artículo" : "Nuevo artículo"}</h3>
+          <button className="icon-btn" onClick={onCancel} aria-label="Cerrar">
+            <X size={18} />
+          </button>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="form">
+          <label>
+            Nombre
+            <input
+              type="text"
+              value={form.nombre}
+              onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+              placeholder="Ej: Balones No. 4"
+              autoFocus
+            />
+          </label>
+          <div className="form-row">
+            <label>
+              Categoría
+              <select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
+                {CATEGORIAS_INVENTARIO.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Sede (opcional)
+              <select value={form.sede} onChange={(e) => setForm({ ...form, sede: e.target.value })}>
+                <option value="">Sin especificar / ambas</option>
+                {SEDES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="form-row">
+            <label>
+              Cantidad total
+              <input
+                type="number"
+                min="0"
+                value={form.cantidadTotal}
+                onChange={(e) => setForm({ ...form, cantidadTotal: e.target.value })}
+              />
+            </label>
+            <label>
+              Cantidad dañada
+              <input
+                type="number"
+                min="0"
+                value={form.cantidadDanada}
+                onChange={(e) => setForm({ ...form, cantidadDanada: e.target.value })}
+              />
+            </label>
           </div>
           <label>
             Notas (opcional)
