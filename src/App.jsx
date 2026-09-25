@@ -107,6 +107,9 @@ function alumnoFromDb(r) {
     posicionSecundaria: r.posicion_secundaria,
     piernaDominante: r.pierna_dominante,
     fotoUrl: r.foto_url,
+    numeroUniforme: r.numero_uniforme,
+    tallaUniforme: r.talla_uniforme,
+    uniformeEntregado: !!r.uniforme_entregado,
   };
 }
 function alumnoToDb(a) {
@@ -130,6 +133,9 @@ function alumnoToDb(a) {
     posicion_secundaria: a.posicionSecundaria || null,
     pierna_dominante: a.piernaDominante || null,
     foto_url: a.fotoUrl || null,
+    numero_uniforme: a.numeroUniforme === "" || a.numeroUniforme === undefined ? null : Number(a.numeroUniforme),
+    talla_uniforme: a.tallaUniforme || null,
+    uniforme_entregado: !!a.uniformeEntregado,
   };
 }
 
@@ -629,6 +635,8 @@ const POSICIONES = [
 ];
 
 const PIERNA_DOMINANTE = ["Derecha", "Izquierda", "Ambas"];
+
+const TALLAS_UNIFORME = ["4", "6", "8", "10", "12", "14", "16", "XS", "S", "M", "L", "XL"];
 
 const CATEGORIAS_GASTO = ["Cancha", "Pago a entrenador", "Equipo y material", "Publicidad", "Otro"];
 
@@ -1472,6 +1480,15 @@ function PanelAdministrativo({ perfil, onLogout }) {
     }
   }
 
+  async function actualizarUniformeEntregado(alumnoId, entregado) {
+    const { error } = await supabase.from("alumnos").update({ uniforme_entregado: entregado }).eq("id", alumnoId);
+    if (!error) {
+      setAlumnos((prev) => prev.map((a) => (a.id === alumnoId ? { ...a, uniformeEntregado: entregado } : a)));
+    } else {
+      showToast("No se pudo actualizar (revisa tu conexión). Inténtalo de nuevo.", true);
+    }
+  }
+
   async function convertirLead(lead, { categoria, horario, tarifaMensual }) {
     if (!iniciarEnvio()) return false;
     try {
@@ -1519,6 +1536,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
           { key: "cobro", label: "Cobro mensual" },
           { key: "cartera", label: "Cartera" },
           { key: "asistencia", label: "Asistencia" },
+          { key: "uniformes", label: "Uniformes" },
           { key: "calendario", label: "Calendario" },
           { key: "reporte", label: "Reporte semanal" },
         ].map((t) => (
@@ -1597,6 +1615,10 @@ function PanelAdministrativo({ perfil, onLogout }) {
                 onMarcar={marcarAsistencia}
                 marcandoIds={marcandoIds}
               />
+            )}
+
+            {tab === "uniformes" && (
+              <UniformesView alumnosActivos={alumnosActivos} onMarcarEntregado={actualizarUniformeEntregado} />
             )}
 
             {tab === "calendario" && (
@@ -2218,6 +2240,15 @@ function PanelAdmin({ perfil, onLogout }) {
     }
   }
 
+  async function actualizarUniformeEntregado(alumnoId, entregado) {
+    const { error } = await supabase.from("alumnos").update({ uniforme_entregado: entregado }).eq("id", alumnoId);
+    if (!error) {
+      setAlumnos((prev) => prev.map((a) => (a.id === alumnoId ? { ...a, uniformeEntregado: entregado } : a)));
+    } else {
+      showToast("No se pudo actualizar (revisa tu conexión). Inténtalo de nuevo.", true);
+    }
+  }
+
   // Convierte un lead en alumno: crea el alumno Y marca el lead como
   // inscrito en una sola operación en la base de datos (ver
   // convertir_lead_a_alumno en supabase-schema.sql), con la categoría,
@@ -2504,6 +2535,7 @@ function PanelAdmin({ perfil, onLogout }) {
           { key: "cobro", label: "Cobro mensual" },
           { key: "cartera", label: "Cartera" },
           { key: "asistencia", label: "Asistencia" },
+          { key: "uniformes", label: "Uniformes" },
           { key: "margen", label: "Margen" },
           { key: "crm", label: "CRM" },
           { key: "calendario", label: "Calendario" },
@@ -2610,6 +2642,10 @@ function PanelAdmin({ perfil, onLogout }) {
                 onMarcar={marcarAsistencia}
                 marcandoIds={marcandoIds}
               />
+            )}
+
+            {tab === "uniformes" && (
+              <UniformesView alumnosActivos={alumnosActivos} onMarcarEntregado={actualizarUniformeEntregado} />
             )}
 
             {tab === "margen" && (
@@ -3198,6 +3234,7 @@ function AlumnosView({
                         <div>
                           <div className="cell-title">
                             {a.nombre}
+                            {a.numeroUniforme != null && <span className="badge-numero">#{a.numeroUniforme}</span>}
                             {a.becado && <span className="badge-becado">Becado</span>}
                           </div>
                           <div className="cell-sub">{a.telefono || ""}</div>
@@ -4835,6 +4872,104 @@ function ReporteSemanalView({ leads, alumnos, pagos, asistencias, eventos }) {
   );
 }
 
+// Seguimiento de uniformes: quién tiene número y talla asignados, y quién
+// ya recibió su uniforme o sigue pendiente. El número y la talla se editan
+// desde la ficha del alumno (Editar) — aquí solo se da seguimiento a la
+// entrega, con un botón rápido para marcarla sin tener que abrir el modal.
+function UniformesView({ alumnosActivos, onMarcarEntregado }) {
+  const [busqueda, setBusqueda] = useState("");
+  const [filtro, setFiltro] = useState("pendientes");
+
+  const filtrados = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    return alumnosActivos
+      .filter((a) =>
+        filtro === "todos" ? true : filtro === "pendientes" ? !a.uniformeEntregado : a.uniformeEntregado
+      )
+      .filter((a) =>
+        q ? a.nombre.toLowerCase().includes(q) || (a.categoria || "").toLowerCase().includes(q) : true
+      )
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [alumnosActivos, busqueda, filtro]);
+
+  const pendientesCount = alumnosActivos.filter((a) => !a.uniformeEntregado).length;
+
+  return (
+    <div className="stack">
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#FCF1DD", color: "#B4790A" }}>
+            <AlertTriangle size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Uniformes pendientes de entregar</div>
+            <div className="kpi-value">{pendientesCount}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="toolbar">
+          <div className="search-box">
+            <Search size={16} />
+            <input
+              placeholder="Buscar por nombre o categoría…"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+            />
+          </div>
+          <select value={filtro} onChange={(e) => setFiltro(e.target.value)}>
+            <option value="pendientes">Pendientes</option>
+            <option value="entregados">Entregados</option>
+            <option value="todos">Todos</option>
+          </select>
+        </div>
+      </div>
+
+      {filtrados.length === 0 ? (
+        <div className="empty">
+          {filtro === "pendientes" ? "Nadie tiene el uniforme pendiente. Todo entregado." : "No hay alumnos que coincidan."}
+        </div>
+      ) : (
+        <div className="panel">
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Alumno</th>
+                  <th>Categoría</th>
+                  <th>Talla</th>
+                  <th>Número</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.map((a) => (
+                  <tr key={a.id}>
+                    <td className="cell-title">{a.nombre}</td>
+                    <td>{a.categoria}</td>
+                    <td>{a.tallaUniforme || "—"}</td>
+                    <td>{a.numeroUniforme != null ? `#${a.numeroUniforme}` : "—"}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className={"pill-toggle" + (a.uniformeEntregado ? " on" : "")}
+                        onClick={() => onMarcarEntregado(a.id, !a.uniformeEntregado)}
+                      >
+                        {a.uniformeEntregado ? "Entregado" : "Marcar entregado"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AsistenciaView({ alumnosActivos, asistencias, onMarcar, marcandoIds }) {
   const [fecha, setFecha] = useState(todayISO());
   const [busqueda, setBusqueda] = useState("");
@@ -4958,6 +5093,9 @@ function AlumnoModal({ initial, onSave, onCancel, enviando, showToast }) {
     posicionSecundaria: initial.posicionSecundaria || "",
     piernaDominante: initial.piernaDominante || "",
     fotoUrl: initial.fotoUrl || "",
+    numeroUniforme: initial.numeroUniforme != null ? String(initial.numeroUniforme) : "",
+    tallaUniforme: initial.tallaUniforme || "",
+    uniformeEntregado: !!initial.uniformeEntregado,
   });
   const [error, setError] = useState(null);
   const [subiendoFoto, setSubiendoFoto] = useState(false);
@@ -5237,6 +5375,38 @@ function AlumnoModal({ initial, onSave, onCancel, enviando, showToast }) {
                 </option>
               ))}
             </select>
+          </label>
+
+          <div className="form-section-label">Uniforme</div>
+          <div className="form-row">
+            <label>
+              Número de camiseta
+              <input
+                type="number"
+                min="0"
+                value={form.numeroUniforme}
+                onChange={(e) => setForm({ ...form, numeroUniforme: e.target.value })}
+              />
+            </label>
+            <label>
+              Talla
+              <select value={form.tallaUniforme} onChange={(e) => setForm({ ...form, tallaUniforme: e.target.value })}>
+                <option value="">Sin definir</option>
+                {TALLAS_UNIFORME.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label className="checkbox-item">
+            <input
+              type="checkbox"
+              checked={form.uniformeEntregado}
+              onChange={(e) => setForm({ ...form, uniformeEntregado: e.target.checked })}
+            />
+            Uniforme entregado
           </label>
 
           <div className="form-section-label">Contacto de emergencia</div>
@@ -5680,6 +5850,7 @@ function Styles() {
       .row-inactive { opacity: 0.5; }
       .cell-title { font-weight: 500; color: var(--charcoal); }
       .badge-becado { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; color: #B4790A; background: #FCF1DD; padding: 1.5px 7px; border-radius: var(--radius-pill); vertical-align: middle; }
+      .badge-numero { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; color: #6C6F72; background: #EFEFF0; padding: 1.5px 7px; border-radius: var(--radius-pill); vertical-align: middle; }
 
       .cell-alumno { display: flex; align-items: center; gap: 10px; }
       .avatar-alumno { border-radius: 50%; object-fit: cover; flex-shrink: 0; }
