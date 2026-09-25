@@ -380,6 +380,7 @@ const TIPOS_EVENTO = [
   { value: "actividad", label: "Actividad" },
   { value: "suspension", label: "Suspensión" },
   { value: "evento_especial", label: "Evento especial" },
+  { value: "clase_prueba", label: "Clase de prueba" },
 ];
 
 function tipoEventoLabel(tipo) {
@@ -1218,6 +1219,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
   });
   const [leadModal, setLeadModal] = useState(null);
   const [confirmConvertirLead, setConfirmConvertirLead] = useState(null);
+  const [confirmDeleteLead, setConfirmDeleteLead] = useState(null);
 
   async function cargarDatos({ silent } = {}) {
     const [a, p, l, c, s, ev] = await Promise.all([
@@ -1453,6 +1455,23 @@ function PanelAdministrativo({ perfil, onLogout }) {
     }
   }
 
+  async function eliminarLead(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("leads").delete().eq("id", id);
+      setConfirmDeleteLead(null);
+      if (!error) {
+        setLeads((prev) => prev.filter((l) => l.id !== id));
+        setLeadModal(null);
+        showToast("Contacto eliminado del CRM.");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
   async function convertirLead(lead, { categoria, horario, tarifaMensual }) {
     if (!iniciarEnvio()) return false;
     try {
@@ -1651,6 +1670,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
           onCerrar={() => setLeadModal(null)}
           onGuardarNotas={guardarNotasLead}
           onConvertir={() => setConfirmConvertirLead(leadModal)}
+          onEliminar={() => setConfirmDeleteLead(leadModal)}
           enviando={enviando}
         />
       )}
@@ -1667,6 +1687,18 @@ function PanelAdministrativo({ perfil, onLogout }) {
           }}
           onCancelar={() => setConfirmConvertirLead(null)}
           enviando={enviando}
+        />
+      )}
+
+      {confirmDeleteLead && (
+        <ConfirmDialog
+          title={`¿Eliminar a "${confirmDeleteLead.nombreAlumno || "este contacto"}"?`}
+          body="Se borrará este contacto del CRM (junto con sus notas y archivos) y no podrá deshacerse."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarLead(confirmDeleteLead.id)}
+          onCancel={() => setConfirmDeleteLead(null)}
+          disabled={enviando}
         />
       )}
 
@@ -2163,6 +2195,23 @@ function PanelAdmin({ perfil, onLogout }) {
         showToast("Notas guardadas.");
       } else {
         showToast("No se pudieron guardar las notas (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarLead(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("leads").delete().eq("id", id);
+      setConfirmDeleteLead(null);
+      if (!error) {
+        setLeads((prev) => prev.filter((l) => l.id !== id));
+        setLeadModal(null);
+        showToast("Contacto eliminado del CRM.");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
       }
     } finally {
       terminarEnvio();
@@ -2673,6 +2722,7 @@ function PanelAdmin({ perfil, onLogout }) {
           onCerrar={() => setLeadModal(null)}
           onGuardarNotas={guardarNotasLead}
           onConvertir={() => setConfirmConvertirLead(leadModal)}
+          onEliminar={() => setConfirmDeleteLead(leadModal)}
           enviando={enviando}
         />
       )}
@@ -2689,6 +2739,18 @@ function PanelAdmin({ perfil, onLogout }) {
           }}
           onCancelar={() => setConfirmConvertirLead(null)}
           enviando={enviando}
+        />
+      )}
+
+      {confirmDeleteLead && (
+        <ConfirmDialog
+          title={`¿Eliminar a "${confirmDeleteLead.nombreAlumno || "este contacto"}"?`}
+          body="Se borrará este contacto del CRM (junto con sus notas y archivos) y no podrá deshacerse."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarLead(confirmDeleteLead.id)}
+          onCancel={() => setConfirmDeleteLead(null)}
+          disabled={enviando}
         />
       )}
 
@@ -4388,7 +4450,7 @@ function LeadCard({ lead, onAbrir, onCambiarEstado }) {
 // médica, que aquí SÍ se muestra porque es la vista de detalle, con acceso
 // solo para admin), más "notas internas" (editable, privado) y el botón
 // para convertirlo en alumno.
-function LeadDetalleModal({ lead, onCerrar, onGuardarNotas, onConvertir, enviando }) {
+function LeadDetalleModal({ lead, onCerrar, onGuardarNotas, onConvertir, onEliminar, enviando }) {
   const [notas, setNotas] = useState(lead.notasInternas || "");
 
   return (
@@ -4396,9 +4458,16 @@ function LeadDetalleModal({ lead, onCerrar, onGuardarNotas, onConvertir, enviand
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h3>{lead.nombreAlumno || "(sin nombre)"}</h3>
-          <button className="icon-btn" onClick={onCerrar} aria-label="Cerrar">
-            <X size={18} />
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            {onEliminar && (
+              <button className="icon-btn danger" onClick={onEliminar} aria-label="Eliminar contacto" title="Eliminar contacto">
+                <Trash2 size={16} />
+              </button>
+            )}
+            <button className="icon-btn" onClick={onCerrar} aria-label="Cerrar">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="crm-detalle-body">
@@ -5636,6 +5705,7 @@ function Styles() {
       .evento-tipo-torneo { background: #FBEAE9; color: #C13F3B; }
       .evento-tipo-entrenamiento { background: #E7F7F1; color: #158F63; }
       .evento-tipo-suspension { background: #F1EAFB; color: #6B3FC1; }
+      .evento-tipo-clase_prueba { background: #FCF1DD; color: #B4790A; }
 
       /* Cartera / recordatorios de pago */
       .cartera-fila { display: flex; align-items: center; gap: 14px; padding: 12px 14px; flex-wrap: wrap; }
@@ -5667,6 +5737,7 @@ function Styles() {
       .calendario-evento-pill.evento-tipo-partido, .calendario-evento-pill.evento-tipo-torneo { background: #FBEAE9; color: #C13F3B; }
       .calendario-evento-pill.evento-tipo-entrenamiento { background: #E7F7F1; color: #158F63; }
       .calendario-evento-pill.evento-tipo-suspension { background: #F1EAFB; color: #6B3FC1; }
+      .calendario-evento-pill.evento-tipo-clase_prueba { background: #FCF1DD; color: #B4790A; }
       .calendario-evento-mas { font-size: 10.5px; color: #8A8D90; padding: 0 4px; }
       @media (max-width: 720px) {
         .calendario-celda { min-height: 60px; }
