@@ -2460,6 +2460,7 @@ function PanelAdmin({ perfil, onLogout }) {
 
   const [leadModal, setLeadModal] = useState(null); // lead abierto en el detalle, o null
   const [confirmConvertirLead, setConfirmConvertirLead] = useState(null); // lead a convertir, o null
+  const [confirmDeleteLead, setConfirmDeleteLead] = useState(null); // lead a eliminar, o null
 
   return (
     <div className="app-root">
