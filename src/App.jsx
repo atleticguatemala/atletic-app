@@ -335,6 +335,75 @@ function eventoToDb(e) {
   };
 }
 
+// Área deportiva: biblioteca de ejercicios y sesiones de entrenamiento.
+function ejercicioFromDb(r) {
+  return {
+    id: r.id,
+    nombre: r.nombre,
+    objetivo: r.objetivo,
+    descripcion: r.descripcion,
+    duracionMin: r.duracion_min,
+    categorias: r.categorias || [],
+    creadoPor: r.creado_por,
+  };
+}
+function ejercicioToDb(e) {
+  return {
+    nombre: e.nombre,
+    objetivo: e.objetivo || "tecnica",
+    descripcion: e.descripcion || null,
+    duracion_min: e.duracionMin === "" || e.duracionMin == null ? null : Number(e.duracionMin),
+    categorias: e.categorias && e.categorias.length ? e.categorias : null,
+  };
+}
+
+function sesionFromDb(r) {
+  return {
+    id: r.id,
+    fecha: r.fecha,
+    categoria: r.categoria,
+    titulo: r.titulo,
+    objetivoGeneral: r.objetivo_general,
+    eventoId: r.evento_id,
+    entrenadorId: r.entrenador_id,
+  };
+}
+function sesionToDb(s) {
+  return {
+    fecha: s.fecha,
+    categoria: s.categoria,
+    titulo: s.titulo,
+    objetivo_general: s.objetivoGeneral || null,
+    evento_id: s.eventoId || null,
+  };
+}
+
+function sesionEjercicioFromDb(r) {
+  return {
+    id: r.id,
+    sesionId: r.sesion_id,
+    ejercicioId: r.ejercicio_id,
+    nombre: r.nombre,
+    duracionMin: r.duracion_min,
+    notas: r.notas,
+    orden: r.orden,
+  };
+}
+
+// Junta cada sesión con su lista de ejercicios (llegan por separado, de la
+// tabla sesion_ejercicios, ya que es una relación uno-a-muchos).
+function juntarSesionesConEjercicios(filasSesiones, filasSesionEjercicios) {
+  const porSesion = {};
+  filasSesionEjercicios.map(sesionEjercicioFromDb).forEach((se) => {
+    if (!porSesion[se.sesionId]) porSesion[se.sesionId] = [];
+    porSesion[se.sesionId].push(se);
+  });
+  return filasSesiones.map(sesionFromDb).map((s) => ({
+    ...s,
+    ejercicios: (porSesion[s.id] || []).sort((a, b) => a.orden - b.orden),
+  }));
+}
+
 // Genera las fechas de las repeticiones de un evento (incluida la
 // primera), desde "fecha" hasta "hasta" (incluida), según "frecuencia".
 // Tope de 52 fechas como protección — nadie necesita repetir un evento
@@ -645,6 +714,17 @@ function rolLabel(rol) {
   return r ? r.label : rol || "—";
 }
 
+const OBJETIVOS_EJERCICIO = [
+  { value: "tecnica", label: "Técnica" },
+  { value: "fisico", label: "Físico" },
+  { value: "tactico", label: "Táctico" },
+  { value: "otro", label: "Otro" },
+];
+function objetivoEjercicioLabel(v) {
+  const o = OBJETIVOS_EJERCICIO.find((x) => x.value === v);
+  return o ? o.label : v || "—";
+}
+
 const HORARIOS = [
   "Sábado",
   "Martes",
@@ -774,7 +854,13 @@ export default function App() {
         if (error || !data) {
           setPerfilError(true);
         } else {
-          setPerfil({ id: data.id, nombre: data.nombre, rol: data.rol, activo: data.activo !== false });
+          setPerfil({
+            id: data.id,
+            nombre: data.nombre,
+            rol: data.rol,
+            activo: data.activo !== false,
+            categorias: data.categorias || [],
+          });
         }
       });
     return () => {
@@ -917,10 +1003,29 @@ function PanelEntrenador({ perfil, onLogout }) {
   const [alumnos, setAlumnos] = useState([]);
   const [asistencias, setAsistencias] = useState([]);
   const [eventos, setEventos] = useState([]);
+  const [ejercicios, setEjercicios] = useState([]);
+  const [sesiones, setSesiones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [marcandoIds, setMarcandoIds] = useState(() => new Set());
   const [toast, setToast] = useState(null);
   const [tab, setTab] = useState("asistencia");
+  const [ejercicioModal, setEjercicioModal] = useState(null);
+  const [confirmDeleteEjercicio, setConfirmDeleteEjercicio] = useState(null);
+  const [sesionModal, setSesionModal] = useState(null);
+  const [confirmDeleteSesion, setConfirmDeleteSesion] = useState(null);
+
+  const enviandoRef = React.useRef(false);
+  const [enviando, setEnviando] = useState(false);
+  function iniciarEnvio() {
+    if (enviandoRef.current) return false;
+    enviandoRef.current = true;
+    setEnviando(true);
+    return true;
+  }
+  function terminarEnvio() {
+    enviandoRef.current = false;
+    setEnviando(false);
+  }
 
   function showToast(msg, isError) {
     setToast({ msg, isError: !!isError });
@@ -928,14 +1033,124 @@ function PanelEntrenador({ perfil, onLogout }) {
   }
 
   async function cargar() {
-    const [a, s, ev] = await Promise.all([
+    const [a, s, ev, ej, se, sej] = await Promise.all([
       supabase.rpc("alumnos_para_asistencia"),
       supabase.from("asistencias").select("*").order("fecha", { ascending: false }),
       supabase.rpc("eventos_para_entrenador"),
+      supabase.from("ejercicios").select("*").order("nombre"),
+      supabase.from("sesiones").select("*").order("fecha", { ascending: false }),
+      supabase.from("sesion_ejercicios").select("*"),
     ]);
     setAlumnos(a.data || []);
     setAsistencias((s.data || []).map(asistenciaFromDb));
     setEventos((ev.data || []).map(eventoFromDb));
+    setEjercicios((ej.data || []).map(ejercicioFromDb));
+    setSesiones(juntarSesionesConEjercicios(se.data || [], sej.data || []));
+  }
+
+  // Guarda un ejercicio de la biblioteca: si trae id, lo actualiza; si no,
+  // lo crea a nombre de este entrenador (creado_por = su propio id).
+  async function guardarEjercicio(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = ejercicioToDb(data);
+      const { error } = esNuevo
+        ? await supabase.from("ejercicios").insert([{ ...payload, creado_por: perfil.id }])
+        : await supabase.from("ejercicios").update(payload).eq("id", data.id);
+      if (error) {
+        showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+        return;
+      }
+      await cargar();
+      setEjercicioModal(null);
+      showToast(esNuevo ? "Ejercicio agregado." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarEjercicio(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("ejercicios").delete().eq("id", id);
+      setConfirmDeleteEjercicio(null);
+      if (!error) {
+        setEjercicios((prev) => prev.filter((e) => e.id !== id));
+        showToast("Ejercicio eliminado.");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  // Guarda una sesión completa: la fila de "sesiones" y, aparte, reemplaza
+  // TODOS sus ejercicios por la lista actual del formulario (más simple y
+  // confiable que ir comparando cuáles cambiaron uno por uno).
+  async function guardarSesion(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = sesionToDb(data);
+      let sesionId = data.id;
+      if (esNuevo) {
+        const { data: fila, error } = await supabase
+          .from("sesiones")
+          .insert([{ ...payload, entrenador_id: perfil.id }])
+          .select()
+          .single();
+        if (error || !fila) {
+          showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+          return;
+        }
+        sesionId = fila.id;
+      } else {
+        const { error } = await supabase.from("sesiones").update(payload).eq("id", sesionId);
+        if (error) {
+          showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+          return;
+        }
+        await supabase.from("sesion_ejercicios").delete().eq("sesion_id", sesionId);
+      }
+      if (data.ejercicios.length) {
+        const filas = data.ejercicios.map((ej, i) => ({
+          sesion_id: sesionId,
+          ejercicio_id: ej.ejercicioId || null,
+          nombre: ej.nombre,
+          duracion_min: ej.duracionMin === "" || ej.duracionMin == null ? null : Number(ej.duracionMin),
+          notas: ej.notas || null,
+          orden: i,
+        }));
+        const { error: errEj } = await supabase.from("sesion_ejercicios").insert(filas);
+        if (errEj) {
+          showToast("La sesión se guardó, pero no se pudieron guardar sus ejercicios. Vuelve a intentarlo.", true);
+          return;
+        }
+      }
+      await cargar();
+      setSesionModal(null);
+      showToast(esNuevo ? "Sesión creada." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarSesion(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("sesiones").delete().eq("id", id);
+      setConfirmDeleteSesion(null);
+      if (!error) {
+        setSesiones((prev) => prev.filter((s) => s.id !== id));
+        showToast("Sesión eliminada.");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
   }
 
   useEffect(() => {
@@ -947,6 +1162,9 @@ function PanelEntrenador({ perfil, onLogout }) {
     const canal = supabase
       .channel("atletic-cambios-entrenador")
       .on("postgres_changes", { event: "*", schema: "public", table: "asistencias" }, () => cargar())
+      .on("postgres_changes", { event: "*", schema: "public", table: "sesiones" }, () => cargar())
+      .on("postgres_changes", { event: "*", schema: "public", table: "sesion_ejercicios" }, () => cargar())
+      .on("postgres_changes", { event: "*", schema: "public", table: "ejercicios" }, () => cargar())
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -1021,6 +1239,8 @@ function PanelEntrenador({ perfil, onLogout }) {
         {[
           { key: "asistencia", label: "Asistencia" },
           { key: "calendario", label: "Calendario" },
+          { key: "sesiones", label: "Sesiones" },
+          { key: "biblioteca", label: "Biblioteca" },
         ].map((t) => (
           <button
             key={t.key}
@@ -1047,9 +1267,70 @@ function PanelEntrenador({ perfil, onLogout }) {
               />
             )}
             {tab === "calendario" && <CalendarioEntrenadorView eventos={eventos} />}
+            {tab === "sesiones" && (
+              <SesionesView
+                sesiones={sesiones}
+                mostrarEntrenador={false}
+                onNuevo={() => setSesionModal({})}
+                onEditar={(s) => setSesionModal(s)}
+                onEliminar={(s) => setConfirmDeleteSesion(s)}
+              />
+            )}
+            {tab === "biblioteca" && (
+              <BibliotecaEjerciciosView
+                ejercicios={ejercicios}
+                miId={perfil.id}
+                esAdmin={false}
+                onNuevo={() => setEjercicioModal({})}
+                onEditar={(e) => setEjercicioModal(e)}
+                onEliminar={(e) => setConfirmDeleteEjercicio(e)}
+              />
+            )}
           </>
         )}
       </main>
+
+      {ejercicioModal !== null && (
+        <EjercicioModal
+          initial={ejercicioModal}
+          onSave={guardarEjercicio}
+          onCancel={() => setEjercicioModal(null)}
+          enviando={enviando}
+        />
+      )}
+      {confirmDeleteEjercicio && (
+        <ConfirmDialog
+          title={`¿Eliminar "${confirmDeleteEjercicio.nombre}"?`}
+          body="Se borra de la biblioteca compartida. Las sesiones que ya lo usaban no se afectan (queda guardado en su propio plan)."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarEjercicio(confirmDeleteEjercicio.id)}
+          onCancel={() => setConfirmDeleteEjercicio(null)}
+          disabled={enviando}
+        />
+      )}
+      {sesionModal !== null && (
+        <SesionModal
+          initial={sesionModal}
+          categoriasDisponibles={perfil.categorias || []}
+          ejerciciosDisponibles={ejercicios}
+          onSave={guardarSesion}
+          onCancel={() => setSesionModal(null)}
+          enviando={enviando}
+        />
+      )}
+      {confirmDeleteSesion && (
+        <ConfirmDialog
+          title={`¿Eliminar la sesión "${confirmDeleteSesion.titulo}"?`}
+          body="No podrá deshacerse."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarSesion(confirmDeleteSesion.id)}
+          onCancel={() => setConfirmDeleteSesion(null)}
+          disabled={enviando}
+        />
+      )}
+
       {toast && (
         <div className={"toast" + (toast.isError ? " toast-error" : "")}>{toast.msg}</div>
       )}
@@ -1279,6 +1560,14 @@ const GRUPOS_NAV_ADMIN = [
       { key: "crm", label: "CRM" },
       { key: "calendario", label: "Calendario" },
       { key: "reporte", label: "Reporte semanal" },
+    ],
+  },
+  {
+    key: "deportiva",
+    label: "Área deportiva",
+    tabs: [
+      { key: "sesiones", label: "Sesiones" },
+      { key: "biblioteca", label: "Biblioteca" },
     ],
   },
   { key: "staff", label: "Staff", tabs: [{ key: "staff", label: "Staff" }] },
@@ -1953,6 +2242,8 @@ function PanelAdmin({ perfil, onLogout }) {
   const [leads, setLeads] = useState([]);
   const [eventos, setEventos] = useState([]);
   const [staff, setStaff] = useState([]);
+  const [ejercicios, setEjercicios] = useState([]);
+  const [sesiones, setSesiones] = useState([]);
   const [tab, setTab] = useState("resumen");
   const [openGroup, setOpenGroup] = useState("resumen"); // grupo de la barra lateral abierto
   const [toast, setToast] = useState(null);
@@ -1964,6 +2255,10 @@ function PanelAdmin({ perfil, onLogout }) {
   const [filtroCategoriaEvento, setFiltroCategoriaEvento] = useState("");
   const [staffModal, setStaffModal] = useState(null); // null | {} (nuevo) | staff (editar)
   const [confirmDeleteStaff, setConfirmDeleteStaff] = useState(null);
+  const [ejercicioModal, setEjercicioModal] = useState(null);
+  const [confirmDeleteEjercicio, setConfirmDeleteEjercicio] = useState(null);
+  const [sesionModal, setSesionModal] = useState(null);
+  const [confirmDeleteSesion, setConfirmDeleteSesion] = useState(null);
 
   // Cambia de tab abriendo también el grupo de la barra lateral al que
   // pertenece — para los accesos directos (ej. botones del Resumen) que no
@@ -2021,7 +2316,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [reloading, setReloading] = useState(false);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, c, g, j, s, l, ev, st] = await Promise.all([
+    const [a, p, c, g, j, s, l, ev, st, ej, se, sej] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("cargos").select("*").order("created_at", { ascending: false }),
@@ -2031,6 +2326,9 @@ function PanelAdmin({ perfil, onLogout }) {
       supabase.from("leads").select("*").order("created_at", { ascending: false }),
       supabase.from("eventos").select("*").order("fecha", { ascending: true }),
       supabase.from("perfiles").select("*").order("nombre"),
+      supabase.from("ejercicios").select("*").order("nombre"),
+      supabase.from("sesiones").select("*").order("fecha", { ascending: false }),
+      supabase.from("sesion_ejercicios").select("*"),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -2041,8 +2339,10 @@ function PanelAdmin({ perfil, onLogout }) {
     setLeads((l.data || []).map(leadFromDb));
     setEventos((ev.data || []).map(eventoFromDb));
     setStaff((st.data || []).map(perfilStaffFromDb));
+    setEjercicios((ej.data || []).map(ejercicioFromDb));
+    setSesiones(juntarSesionesConEjercicios(se.data || [], sej.data || []));
 
-    const algunFallo = [a, p, c, g, j, s, l, ev, st].some((r) => r.error);
+    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej].some((r) => r.error);
     if (algunFallo) {
       showToast(
         "No se pudo cargar toda tu información (revisa tu conexión). Dale a \"Recargar\" para intentar de nuevo.",
@@ -2068,6 +2368,9 @@ function PanelAdmin({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "eventos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "perfiles" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "ejercicios" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "sesiones" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "sesion_ejercicios" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -2347,6 +2650,115 @@ function PanelAdmin({ perfil, onLogout }) {
       if (!error) {
         setStaff((prev) => prev.filter((x) => x.id !== id));
         showToast("Perfil de staff eliminado (su login en Supabase no se borró).");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  // Guarda un ejercicio de la biblioteca: si trae id, lo actualiza; si no,
+  // lo crea a tu nombre (creado_por = tu propio id).
+  async function guardarEjercicio(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = ejercicioToDb(data);
+      const { error } = esNuevo
+        ? await supabase.from("ejercicios").insert([{ ...payload, creado_por: perfil.id }])
+        : await supabase.from("ejercicios").update(payload).eq("id", data.id);
+      if (error) {
+        showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+        return;
+      }
+      await cargarDatos({ silent: true });
+      setEjercicioModal(null);
+      showToast(esNuevo ? "Ejercicio agregado." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarEjercicio(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("ejercicios").delete().eq("id", id);
+      setConfirmDeleteEjercicio(null);
+      if (!error) {
+        setEjercicios((prev) => prev.filter((e) => e.id !== id));
+        showToast("Ejercicio eliminado.");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  // Guarda una sesión completa: la fila de "sesiones" (a nombre del
+  // entrenador elegido en el formulario) y reemplaza todos sus ejercicios
+  // por la lista actual.
+  async function guardarSesion(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = sesionToDb(data);
+      let sesionId = data.id;
+      if (esNuevo) {
+        if (!data.entrenadorId) {
+          showToast("Elige a qué entrenador corresponde esta sesión.", true);
+          return;
+        }
+        const { data: fila, error } = await supabase
+          .from("sesiones")
+          .insert([{ ...payload, entrenador_id: data.entrenadorId }])
+          .select()
+          .single();
+        if (error || !fila) {
+          showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+          return;
+        }
+        sesionId = fila.id;
+      } else {
+        const { error } = await supabase.from("sesiones").update(payload).eq("id", sesionId);
+        if (error) {
+          showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+          return;
+        }
+        await supabase.from("sesion_ejercicios").delete().eq("sesion_id", sesionId);
+      }
+      if (data.ejercicios.length) {
+        const filas = data.ejercicios.map((ej, i) => ({
+          sesion_id: sesionId,
+          ejercicio_id: ej.ejercicioId || null,
+          nombre: ej.nombre,
+          duracion_min: ej.duracionMin === "" || ej.duracionMin == null ? null : Number(ej.duracionMin),
+          notas: ej.notas || null,
+          orden: i,
+        }));
+        const { error: errEj } = await supabase.from("sesion_ejercicios").insert(filas);
+        if (errEj) {
+          showToast("La sesión se guardó, pero no se pudieron guardar sus ejercicios. Vuelve a intentarlo.", true);
+          return;
+        }
+      }
+      await cargarDatos({ silent: true });
+      setSesionModal(null);
+      showToast(esNuevo ? "Sesión creada." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarSesion(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("sesiones").delete().eq("id", id);
+      setConfirmDeleteSesion(null);
+      if (!error) {
+        setSesiones((prev) => prev.filter((s) => s.id !== id));
+        showToast("Sesión eliminada.");
       } else {
         showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
       }
@@ -2965,6 +3377,28 @@ function PanelAdmin({ perfil, onLogout }) {
                 onEliminar={(p) => setConfirmDeleteStaff(p)}
               />
             )}
+
+            {tab === "sesiones" && (
+              <SesionesView
+                sesiones={sesiones}
+                staffNombre={(id) => (staff.find((p) => p.id === id) || {}).nombre}
+                mostrarEntrenador
+                onNuevo={() => setSesionModal({})}
+                onEditar={(s) => setSesionModal(s)}
+                onEliminar={(s) => setConfirmDeleteSesion(s)}
+              />
+            )}
+
+            {tab === "biblioteca" && (
+              <BibliotecaEjerciciosView
+                ejercicios={ejercicios}
+                miId={perfil.id}
+                esAdmin
+                onNuevo={() => setEjercicioModal({})}
+                onEditar={(e) => setEjercicioModal(e)}
+                onEliminar={(e) => setConfirmDeleteEjercicio(e)}
+              />
+            )}
           </>
         )}
         </main>
@@ -2977,6 +3411,48 @@ function PanelAdmin({ perfil, onLogout }) {
           onSave={guardarEvento}
           onCancel={() => setEventoModal(null)}
           enviando={enviando}
+        />
+      )}
+
+      {ejercicioModal !== null && (
+        <EjercicioModal
+          initial={ejercicioModal}
+          onSave={guardarEjercicio}
+          onCancel={() => setEjercicioModal(null)}
+          enviando={enviando}
+        />
+      )}
+      {confirmDeleteEjercicio && (
+        <ConfirmDialog
+          title={`¿Eliminar "${confirmDeleteEjercicio.nombre}"?`}
+          body="Se borra de la biblioteca compartida. Las sesiones que ya lo usaban no se afectan (queda guardado en su propio plan)."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarEjercicio(confirmDeleteEjercicio.id)}
+          onCancel={() => setConfirmDeleteEjercicio(null)}
+          disabled={enviando}
+        />
+      )}
+      {sesionModal !== null && (
+        <SesionModal
+          initial={sesionModal}
+          categoriasDisponibles={CATEGORIAS}
+          ejerciciosDisponibles={ejercicios}
+          entrenadoresDisponibles={staff.filter((p) => p.rol === "entrenador" && p.activo)}
+          onSave={guardarSesion}
+          onCancel={() => setSesionModal(null)}
+          enviando={enviando}
+        />
+      )}
+      {confirmDeleteSesion && (
+        <ConfirmDialog
+          title={`¿Eliminar la sesión "${confirmDeleteSesion.titulo}"?`}
+          body="No podrá deshacerse."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarSesion(confirmDeleteSesion.id)}
+          onCancel={() => setConfirmDeleteSesion(null)}
+          disabled={enviando}
         />
       )}
 
@@ -4243,6 +4719,491 @@ function CalendarioEntrenadorView({ eventos }) {
           </div>
         ))
       )}
+    </div>
+  );
+}
+
+// Biblioteca de ejercicios: compartida entre admin, administrativo y
+// todos los entrenadores. Se usa como catálogo del que se pica al armar
+// una sesión (ver SesionModal más abajo). "puedeEditar" decide, por cada
+// fila, si le toca el lápiz/basurero (admin ve todo pero según RLS solo
+// puede editar/borrar el admin o quien lo creó — se refleja aquí para no
+// mostrar un botón que igual la base de datos va a rechazar).
+function BibliotecaEjerciciosView({ ejercicios, miId, esAdmin, onNuevo, onEditar, onEliminar }) {
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroObjetivo, setFiltroObjetivo] = useState("");
+
+  const filtrados = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    return ejercicios
+      .filter((e) => (filtroObjetivo ? e.objetivo === filtroObjetivo : true))
+      .filter((e) => (q ? e.nombre.toLowerCase().includes(q) : true))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [ejercicios, busqueda, filtroObjetivo]);
+
+  return (
+    <div className="stack">
+      <div className="toolbar">
+        <div className="search-box">
+          <Search size={16} />
+          <input placeholder="Buscar ejercicio…" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+        </div>
+        <div className="toolbar-actions">
+          <select value={filtroObjetivo} onChange={(e) => setFiltroObjetivo(e.target.value)}>
+            <option value="">Todos los objetivos</option>
+            {OBJETIVOS_EJERCICIO.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <button className="btn-primary" onClick={onNuevo}>
+            <Plus size={16} /> Agregar ejercicio
+          </button>
+        </div>
+      </div>
+
+      {filtrados.length === 0 ? (
+        <div className="empty">
+          {ejercicios.length === 0
+            ? "Todavía no hay ejercicios en la biblioteca. Agrega el primero con el botón de arriba."
+            : "No hay ejercicios que coincidan."}
+        </div>
+      ) : (
+        <div className="panel">
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Nombre</th>
+                  <th>Objetivo</th>
+                  <th>Duración</th>
+                  <th>Categorías</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.map((e) => {
+                  const puedeEditar = esAdmin || e.creadoPor === miId;
+                  return (
+                    <tr key={e.id}>
+                      <td className="cell-title">{e.nombre}</td>
+                      <td>{objetivoEjercicioLabel(e.objetivo)}</td>
+                      <td>{e.duracionMin ? `${e.duracionMin} min` : "—"}</td>
+                      <td>{e.categorias.length ? e.categorias.join(", ") : <span className="muted">Todas</span>}</td>
+                      <td>
+                        {puedeEditar && (
+                          <div className="actions">
+                            <button className="icon-btn" onClick={() => onEditar(e)} aria-label="Editar">
+                              <Pencil size={15} />
+                            </button>
+                            <button className="icon-btn" onClick={() => onEliminar(e)} aria-label="Eliminar">
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EjercicioModal({ initial, onSave, onCancel, enviando }) {
+  const [form, setForm] = useState({
+    id: initial.id || null,
+    nombre: initial.nombre || "",
+    objetivo: initial.objetivo || "tecnica",
+    descripcion: initial.descripcion || "",
+    duracionMin: initial.duracionMin ?? "",
+    categorias: initial.categorias || [],
+  });
+  const [error, setError] = useState(null);
+
+  function toggleCategoria(c) {
+    setForm((prev) => {
+      const set = new Set(prev.categorias);
+      if (set.has(c)) set.delete(c);
+      else set.add(c);
+      return { ...prev, categorias: Array.from(set) };
+    });
+  }
+
+  function handleSubmit(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!form.nombre.trim()) {
+      setError("Escribe el nombre del ejercicio.");
+      return;
+    }
+    setError(null);
+    onSave(form);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{form.id ? "Editar ejercicio" : "Nuevo ejercicio"}</h3>
+          <button className="icon-btn" onClick={onCancel} aria-label="Cerrar">
+            <X size={18} />
+          </button>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="form">
+          <label>
+            Nombre
+            <input
+              type="text"
+              value={form.nombre}
+              onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+              placeholder="Ej: Rondo 4v2"
+              autoFocus
+            />
+          </label>
+          <div className="form-row">
+            <label>
+              Objetivo
+              <select value={form.objetivo} onChange={(e) => setForm({ ...form, objetivo: e.target.value })}>
+                {OBJETIVOS_EJERCICIO.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Duración sugerida (min)
+              <input
+                type="number"
+                min="0"
+                value={form.duracionMin}
+                onChange={(e) => setForm({ ...form, duracionMin: e.target.value })}
+              />
+            </label>
+          </div>
+          <label>
+            Descripción
+            <textarea
+              rows={3}
+              value={form.descripcion}
+              onChange={(e) => setForm({ ...form, descripcion: e.target.value })}
+              placeholder="Cómo se hace, qué trabaja, variantes…"
+            />
+          </label>
+          <div>
+            <div className="form-section-label">
+              Categorías {form.categorias.length > 0 && `(${form.categorias.length})`}
+              {form.categorias.length === 0 && <span className="muted"> — ninguna elegida = sirve para todas</span>}
+            </div>
+            <div className="evento-convocados-lista">
+              {CATEGORIAS.map((c) => (
+                <label key={c} className="checkbox-item">
+                  <input type="checkbox" checked={form.categorias.includes(c)} onChange={() => toggleCategoria(c)} />
+                  {c}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onCancel} disabled={enviando}>
+            Cancelar
+          </button>
+          <button className="btn-primary" onClick={handleSubmit} disabled={enviando}>
+            {enviando ? "Guardando…" : "Guardar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Lista de sesiones de entrenamiento planificadas. Se usa tanto en el
+// panel del entrenador (solo las suyas) como en el panel de Admin (todas,
+// con la columna de quién la armó, para dar seguimiento sin tener que
+// planificarlas ellos mismos).
+function SesionesView({ sesiones, staffNombre, mostrarEntrenador, onNuevo, onEditar, onEliminar }) {
+  const [filtroCategoria, setFiltroCategoria] = useState("");
+
+  const visibles = useMemo(() => {
+    return sesiones
+      .filter((s) => (filtroCategoria ? s.categoria === filtroCategoria : true))
+      .sort((a, b) => b.fecha.localeCompare(a.fecha));
+  }, [sesiones, filtroCategoria]);
+
+  const categoriasConSesiones = useMemo(
+    () => Array.from(new Set(sesiones.map((s) => s.categoria))).sort(),
+    [sesiones]
+  );
+
+  return (
+    <div className="stack">
+      <div className="toolbar">
+        <select value={filtroCategoria} onChange={(e) => setFiltroCategoria(e.target.value)}>
+          <option value="">Todas las categorías</option>
+          {categoriasConSesiones.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+        <div className="toolbar-actions">
+          <button className="btn-primary" onClick={onNuevo}>
+            <Plus size={16} /> Nueva sesión
+          </button>
+        </div>
+      </div>
+
+      {visibles.length === 0 ? (
+        <div className="empty">
+          {sesiones.length === 0
+            ? "No hay sesiones planificadas todavía. Arma la primera con el botón de arriba."
+            : "No hay sesiones que coincidan con ese filtro."}
+        </div>
+      ) : (
+        visibles.map((s) => (
+          <div key={s.id} className="panel evento-fila">
+            <div className="evento-fila-info">
+              <div className="evento-fila-titulo">
+                {s.titulo}
+                <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
+                  {s.categoria}
+                </span>
+              </div>
+              <div className="muted" style={{ fontSize: 13 }}>
+                {formatDiaLargo(s.fecha)}
+                {mostrarEntrenador ? " · " + (staffNombre(s.entrenadorId) || "(sin nombre)") : ""}
+                {" · "}
+                {s.ejercicios.length} {s.ejercicios.length === 1 ? "ejercicio" : "ejercicios"}
+              </div>
+            </div>
+            <div className="evento-fila-acciones">
+              <button className="icon-btn" onClick={() => onEditar(s)} aria-label="Editar">
+                <Pencil size={16} />
+              </button>
+              <button className="icon-btn danger" onClick={() => onEliminar(s)} aria-label="Eliminar">
+                <Trash2 size={16} />
+              </button>
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// Arma o edita una sesión: datos generales + la lista de ejercicios que la
+// componen, picados de la biblioteca. Los ejercicios de la sesión viven en
+// el estado local del formulario hasta que se guarda todo junto.
+function SesionModal({ initial, categoriasDisponibles, ejerciciosDisponibles, entrenadoresDisponibles, onSave, onCancel, enviando }) {
+  const [form, setForm] = useState({
+    id: initial.id || null,
+    fecha: initial.fecha || todayISO(),
+    categoria: initial.categoria || categoriasDisponibles[0] || "",
+    titulo: initial.titulo || "",
+    objetivoGeneral: initial.objetivoGeneral || "",
+    entrenadorId: initial.entrenadorId || (entrenadoresDisponibles && entrenadoresDisponibles[0] ? entrenadoresDisponibles[0].id : null),
+    ejercicios: (initial.ejercicios || []).map((x) => ({ ...x })),
+  });
+  const [ejercicioAAgregar, setEjercicioAAgregar] = useState("");
+  const [error, setError] = useState(null);
+
+  function agregarEjercicio() {
+    if (!ejercicioAAgregar) return;
+    const ej = ejerciciosDisponibles.find((x) => x.id === ejercicioAAgregar);
+    if (!ej) return;
+    setForm((prev) => ({
+      ...prev,
+      ejercicios: [
+        ...prev.ejercicios,
+        { ejercicioId: ej.id, nombre: ej.nombre, duracionMin: ej.duracionMin ?? "", notas: "" },
+      ],
+    }));
+    setEjercicioAAgregar("");
+  }
+
+  function quitarEjercicio(idx) {
+    setForm((prev) => ({ ...prev, ejercicios: prev.ejercicios.filter((_, i) => i !== idx) }));
+  }
+
+  function moverEjercicio(idx, delta) {
+    setForm((prev) => {
+      const lista = [...prev.ejercicios];
+      const destino = idx + delta;
+      if (destino < 0 || destino >= lista.length) return prev;
+      [lista[idx], lista[destino]] = [lista[destino], lista[idx]];
+      return { ...prev, ejercicios: lista };
+    });
+  }
+
+  function actualizarEjercicio(idx, campo, valor) {
+    setForm((prev) => {
+      const lista = [...prev.ejercicios];
+      lista[idx] = { ...lista[idx], [campo]: valor };
+      return { ...prev, ejercicios: lista };
+    });
+  }
+
+  function handleSubmit(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!form.titulo.trim()) {
+      setError("Escribe un título para la sesión.");
+      return;
+    }
+    if (!form.categoria) {
+      setError("Elige la categoría de esta sesión.");
+      return;
+    }
+    if (!form.fecha) {
+      setError("Elige una fecha.");
+      return;
+    }
+    setError(null);
+    onSave(form);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{form.id ? "Editar sesión" : "Nueva sesión"}</h3>
+          <button className="icon-btn" onClick={onCancel} aria-label="Cerrar">
+            <X size={18} />
+          </button>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="form">
+          <label>
+            Título
+            <input
+              type="text"
+              value={form.titulo}
+              onChange={(e) => setForm({ ...form, titulo: e.target.value })}
+              placeholder="Ej: Resistencia y pase corto"
+              autoFocus
+            />
+          </label>
+          {entrenadoresDisponibles && (
+            <label>
+              Entrenador
+              <select value={form.entrenadorId || ""} onChange={(e) => setForm({ ...form, entrenadorId: e.target.value })}>
+                {entrenadoresDisponibles.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.nombre || "(sin nombre)"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <div className="form-row">
+            <label>
+              Fecha
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
+            </label>
+            <label>
+              Categoría
+              <select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
+                {categoriasDisponibles.length === 0 && <option value="">Sin categorías asignadas</option>}
+                {categoriasDisponibles.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label>
+            Objetivo general de la sesión (opcional)
+            <input
+              type="text"
+              value={form.objetivoGeneral}
+              onChange={(e) => setForm({ ...form, objetivoGeneral: e.target.value })}
+            />
+          </label>
+
+          <div>
+            <div className="form-section-label">Ejercicios ({form.ejercicios.length})</div>
+            {form.ejercicios.length === 0 && (
+              <div className="empty" style={{ padding: 14 }}>
+                Todavía no agregas ningún ejercicio.
+              </div>
+            )}
+            <div className="stack" style={{ gap: 8 }}>
+              {form.ejercicios.map((ej, idx) => (
+                <div key={idx} className="panel" style={{ padding: 10 }}>
+                  <div className="form-row" style={{ alignItems: "center", flexWrap: "nowrap" }}>
+                    <div style={{ flex: 2, fontWeight: 600 }}>{ej.nombre}</div>
+                    <input
+                      type="number"
+                      min="0"
+                      style={{ flex: "0 0 90px" }}
+                      value={ej.duracionMin}
+                      onChange={(e) => actualizarEjercicio(idx, "duracionMin", e.target.value)}
+                      placeholder="min"
+                    />
+                    <button type="button" className="icon-btn" onClick={() => moverEjercicio(idx, -1)} aria-label="Subir" disabled={idx === 0}>
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => moverEjercicio(idx, 1)}
+                      aria-label="Bajar"
+                      disabled={idx === form.ejercicios.length - 1}
+                    >
+                      ↓
+                    </button>
+                    <button type="button" className="icon-btn danger" onClick={() => quitarEjercicio(idx)} aria-label="Quitar">
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={ej.notas}
+                    onChange={(e) => actualizarEjercicio(idx, "notas", e.target.value)}
+                    placeholder="Notas para esta sesión (opcional)"
+                    style={{ marginTop: 6 }}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="form-row" style={{ marginTop: 10 }}>
+              <select value={ejercicioAAgregar} onChange={(e) => setEjercicioAAgregar(e.target.value)}>
+                <option value="">
+                  {ejerciciosDisponibles.length === 0 ? "No hay ejercicios en la biblioteca todavía" : "Elige un ejercicio…"}
+                </option>
+                {ejerciciosDisponibles.map((ej) => (
+                  <option key={ej.id} value={ej.id}>
+                    {ej.nombre}
+                  </option>
+                ))}
+              </select>
+              <button type="button" className="btn-secondary" onClick={agregarEjercicio} disabled={!ejercicioAAgregar}>
+                <Plus size={15} /> Agregar
+              </button>
+            </div>
+            {ejerciciosDisponibles.length === 0 && (
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+                Agrega ejercicios primero en la pestaña "Biblioteca de ejercicios".
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onCancel} disabled={enviando}>
+            Cancelar
+          </button>
+          <button className="btn-primary" onClick={handleSubmit} disabled={enviando}>
+            {enviando ? "Guardando…" : "Guardar"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
