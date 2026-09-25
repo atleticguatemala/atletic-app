@@ -142,6 +142,30 @@ function alumnoToDb(a) {
   };
 }
 
+// Staff (tabla "perfiles"): quién tiene acceso a la app, con qué rol, y
+// -si es entrenador- de qué categorías está a cargo.
+function perfilStaffFromDb(r) {
+  return {
+    id: r.id,
+    nombre: r.nombre,
+    rol: r.rol,
+    telefono: r.telefono,
+    correo: r.correo,
+    activo: r.activo !== false,
+    categorias: r.categorias || [],
+  };
+}
+function perfilStaffToDb(p) {
+  return {
+    nombre: p.nombre,
+    rol: p.rol,
+    telefono: p.telefono || null,
+    correo: p.correo || null,
+    activo: p.activo !== false,
+    categorias: p.rol === "entrenador" && p.categorias && p.categorias.length ? p.categorias : null,
+  };
+}
+
 // Calcula la edad en años a partir de una fecha de nacimiento (YYYY-MM-DD).
 // Devuelve null si no hay fecha (el alumno todavía no la tiene registrada),
 // para que la pantalla sepa que no hay nada que mostrar en vez de un "0".
@@ -610,6 +634,17 @@ const CATEGORIAS = [
   "Otra",
 ];
 
+const ROLES_STAFF = [
+  { value: "admin", label: "Administrador" },
+  { value: "administrativo", label: "Administrativo" },
+  { value: "asistente", label: "Asistente" },
+  { value: "entrenador", label: "Entrenador" },
+];
+function rolLabel(rol) {
+  const r = ROLES_STAFF.find((x) => x.value === rol);
+  return r ? r.label : rol || "—";
+}
+
 const HORARIOS = [
   "Sábado",
   "Martes",
@@ -739,7 +774,7 @@ export default function App() {
         if (error || !data) {
           setPerfilError(true);
         } else {
-          setPerfil({ id: data.id, nombre: data.nombre, rol: data.rol });
+          setPerfil({ id: data.id, nombre: data.nombre, rol: data.rol, activo: data.activo !== false });
         }
       });
     return () => {
@@ -771,6 +806,16 @@ export default function App() {
 
   if (!perfil) {
     return <PantallaCentrada mensaje="Cargando tu perfil…" />;
+  }
+
+  if (!perfil.activo) {
+    return (
+      <PantallaCentrada
+        mensaje="Tu cuenta fue desactivada. Pídele al administrador de la academia que la reactive desde Staff."
+        error
+        onLogout={cerrarSesion}
+      />
+    );
   }
 
   if (perfil.rol === "entrenador") {
@@ -871,9 +916,11 @@ function LoginScreen() {
 function PanelEntrenador({ perfil, onLogout }) {
   const [alumnos, setAlumnos] = useState([]);
   const [asistencias, setAsistencias] = useState([]);
+  const [eventos, setEventos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [marcandoIds, setMarcandoIds] = useState(() => new Set());
   const [toast, setToast] = useState(null);
+  const [tab, setTab] = useState("asistencia");
 
   function showToast(msg, isError) {
     setToast({ msg, isError: !!isError });
@@ -881,12 +928,14 @@ function PanelEntrenador({ perfil, onLogout }) {
   }
 
   async function cargar() {
-    const [a, s] = await Promise.all([
+    const [a, s, ev] = await Promise.all([
       supabase.rpc("alumnos_para_asistencia"),
       supabase.from("asistencias").select("*").order("fecha", { ascending: false }),
+      supabase.rpc("eventos_para_entrenador"),
     ]);
     setAlumnos(a.data || []);
     setAsistencias((s.data || []).map(asistenciaFromDb));
+    setEventos((ev.data || []).map(eventoFromDb));
   }
 
   useEffect(() => {
@@ -959,7 +1008,7 @@ function PanelEntrenador({ perfil, onLogout }) {
           <LogoMark />
           <div>
             <div className="brand-name">Atletic Guatemala</div>
-            <div className="brand-sub">Asistencia</div>
+            <div className="brand-sub">Entrenador</div>
           </div>
         </div>
         <button className="reload-btn" onClick={onLogout} title="Cerrar sesión">
@@ -967,17 +1016,38 @@ function PanelEntrenador({ perfil, onLogout }) {
           {perfil?.nombre ? perfil.nombre : "Salir"}
         </button>
       </header>
+
+      <nav className="tabs">
+        {[
+          { key: "asistencia", label: "Asistencia" },
+          { key: "calendario", label: "Calendario" },
+        ].map((t) => (
+          <button
+            key={t.key}
+            className={"tab" + (tab === t.key ? " active" : "")}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
+
       <main className="content">
         {loading ? (
           <div className="empty">Cargando información…</div>
         ) : (
-          <AsistenciaView
-            alumnosActivos={alumnos}
-            asistencias={asistencias}
-            onMarcar={marcarAsistencia}
-            onDesmarcar={desmarcarAsistencia}
-            marcandoIds={marcandoIds}
-          />
+          <>
+            {tab === "asistencia" && (
+              <AsistenciaView
+                alumnosActivos={alumnos}
+                asistencias={asistencias}
+                onMarcar={marcarAsistencia}
+                onDesmarcar={desmarcarAsistencia}
+                marcandoIds={marcandoIds}
+              />
+            )}
+            {tab === "calendario" && <CalendarioEntrenadorView eventos={eventos} />}
+          </>
         )}
       </main>
       {toast && (
@@ -1211,6 +1281,7 @@ const GRUPOS_NAV_ADMIN = [
       { key: "reporte", label: "Reporte semanal" },
     ],
   },
+  { key: "staff", label: "Staff", tabs: [{ key: "staff", label: "Staff" }] },
 ];
 
 const GRUPOS_NAV_ADMINISTRATIVO = [
@@ -1881,6 +1952,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [asistencias, setAsistencias] = useState([]);
   const [leads, setLeads] = useState([]);
   const [eventos, setEventos] = useState([]);
+  const [staff, setStaff] = useState([]);
   const [tab, setTab] = useState("resumen");
   const [openGroup, setOpenGroup] = useState("resumen"); // grupo de la barra lateral abierto
   const [toast, setToast] = useState(null);
@@ -1890,6 +1962,8 @@ function PanelAdmin({ perfil, onLogout }) {
   const [confirmDeleteSerieEvento, setConfirmDeleteSerieEvento] = useState(null);
   const [filtroTipoEvento, setFiltroTipoEvento] = useState("");
   const [filtroCategoriaEvento, setFiltroCategoriaEvento] = useState("");
+  const [staffModal, setStaffModal] = useState(null); // null | {} (nuevo) | staff (editar)
+  const [confirmDeleteStaff, setConfirmDeleteStaff] = useState(null);
 
   // Cambia de tab abriendo también el grupo de la barra lateral al que
   // pertenece — para los accesos directos (ej. botones del Resumen) que no
@@ -1947,7 +2021,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [reloading, setReloading] = useState(false);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, c, g, j, s, l, ev] = await Promise.all([
+    const [a, p, c, g, j, s, l, ev, st] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("cargos").select("*").order("created_at", { ascending: false }),
@@ -1956,6 +2030,7 @@ function PanelAdmin({ perfil, onLogout }) {
       supabase.from("asistencias").select("*").order("fecha", { ascending: false }),
       supabase.from("leads").select("*").order("created_at", { ascending: false }),
       supabase.from("eventos").select("*").order("fecha", { ascending: true }),
+      supabase.from("perfiles").select("*").order("nombre"),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -1965,8 +2040,9 @@ function PanelAdmin({ perfil, onLogout }) {
     setAsistencias((s.data || []).map(asistenciaFromDb));
     setLeads((l.data || []).map(leadFromDb));
     setEventos((ev.data || []).map(eventoFromDb));
+    setStaff((st.data || []).map(perfilStaffFromDb));
 
-    const algunFallo = [a, p, c, g, j, s, l, ev].some((r) => r.error);
+    const algunFallo = [a, p, c, g, j, s, l, ev, st].some((r) => r.error);
     if (algunFallo) {
       showToast(
         "No se pudo cargar toda tu información (revisa tu conexión). Dale a \"Recargar\" para intentar de nuevo.",
@@ -1991,6 +2067,7 @@ function PanelAdmin({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "asistencias" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "eventos" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "perfiles" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -2206,6 +2283,72 @@ function PanelAdmin({ perfil, onLogout }) {
         showToast("Serie de eventos eliminada.");
       } else {
         showToast("No se pudo eliminar la serie (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  // Guarda un miembro del staff: si trae id, actualiza su perfil existente
+  // (rol, categorías, contacto); si no trae id, crea uno NUEVO — pero eso
+  // solo funciona si esa persona YA tiene un login creado en Supabase
+  // (Authentication → Users) y el id pegado corresponde a esa cuenta; si
+  // no existe, la base de datos rechaza la inserción (llave foránea).
+  async function guardarStaff(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = perfilStaffToDb(data);
+      if (esNuevo) {
+        if (!data.id_nuevo || !data.id_nuevo.trim()) {
+          showToast("Pega el ID del usuario (de Supabase → Authentication → Users).", true);
+          return;
+        }
+        const { error } = await supabase.from("perfiles").insert([{ id: data.id_nuevo.trim(), ...payload }]);
+        if (error) {
+          showToast(
+            error.message && error.message.includes("foreign key")
+              ? "Ese ID no corresponde a ningún usuario creado en Supabase. Créalo primero en Authentication → Users."
+              : "No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.",
+            true
+          );
+          return;
+        }
+      } else {
+        const { error } = await supabase.from("perfiles").update(payload).eq("id", data.id);
+        if (error) {
+          showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+          return;
+        }
+      }
+      await cargarDatos({ silent: true });
+      setStaffModal(null);
+      showToast(esNuevo ? "Colaborador agregado." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function toggleActivoStaff(p) {
+    const { error } = await supabase.from("perfiles").update({ activo: !p.activo }).eq("id", p.id);
+    if (!error) {
+      setStaff((prev) => prev.map((x) => (x.id === p.id ? { ...x, activo: !p.activo } : x)));
+      showToast(!p.activo ? "Cuenta activada." : "Cuenta desactivada.");
+    } else {
+      showToast("No se pudo actualizar (revisa tu conexión). Inténtalo de nuevo.", true);
+    }
+  }
+
+  async function eliminarStaff(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("perfiles").delete().eq("id", id);
+      setConfirmDeleteStaff(null);
+      if (!error) {
+        setStaff((prev) => prev.filter((x) => x.id !== id));
+        showToast("Perfil de staff eliminado (su login en Supabase no se borró).");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
       }
     } finally {
       terminarEnvio();
@@ -2812,6 +2955,16 @@ function PanelAdmin({ perfil, onLogout }) {
             {tab === "reporte" && (
               <ReporteSemanalView leads={leads} alumnos={alumnos} pagos={pagos} asistencias={asistencias} eventos={eventos} />
             )}
+
+            {tab === "staff" && (
+              <StaffView
+                staff={staff}
+                onNuevo={() => setStaffModal({})}
+                onEditar={(p) => setStaffModal(p)}
+                onToggleActivo={toggleActivoStaff}
+                onEliminar={(p) => setConfirmDeleteStaff(p)}
+              />
+            )}
           </>
         )}
         </main>
@@ -2824,6 +2977,27 @@ function PanelAdmin({ perfil, onLogout }) {
           onSave={guardarEvento}
           onCancel={() => setEventoModal(null)}
           enviando={enviando}
+        />
+      )}
+
+      {staffModal !== null && (
+        <StaffModal
+          initial={staffModal}
+          onSave={guardarStaff}
+          onCancel={() => setStaffModal(null)}
+          enviando={enviando}
+        />
+      )}
+
+      {confirmDeleteStaff && (
+        <ConfirmDialog
+          title={`¿Eliminar el perfil de "${confirmDeleteStaff.nombre || "este colaborador"}"?`}
+          body="Pierde el acceso a la app de inmediato. Su login en Supabase no se borra — puedes volver a crearle un perfil después si hace falta."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarStaff(confirmDeleteStaff.id)}
+          onCancel={() => setConfirmDeleteStaff(null)}
+          disabled={enviando}
         />
       )}
 
@@ -4008,6 +4182,71 @@ function MargenView({ alumnosActivos, totalGastosMes, monthLabelStr }) {
   );
 }
 
+// Agenda de solo lectura para el entrenador: los eventos ya le llegan
+// filtrados a sus categorías (ver eventos_para_entrenador en
+// supabase-schema.sql) y SIN el campo de notas, así que aquí solo hay que
+// mostrarlos — nada de editar, borrar ni convocatoria. Por defecto solo
+// próximos, para no llenar la pantalla de historial en el celular.
+function CalendarioEntrenadorView({ eventos }) {
+  const [filtro, setFiltro] = useState("proximos");
+  const hoyISO = todayISO();
+
+  const visibles = useMemo(() => {
+    return eventos
+      .filter((e) => (filtro === "proximos" ? e.fecha >= hoyISO : true))
+      .sort((a, b) => (a.fecha + (a.hora || "")).localeCompare(b.fecha + (b.hora || "")));
+  }, [eventos, filtro, hoyISO]);
+
+  return (
+    <div className="stack">
+      <div className="toolbar">
+        <div />
+        <select value={filtro} onChange={(e) => setFiltro(e.target.value)}>
+          <option value="proximos">Próximos</option>
+          <option value="todos">Todos</option>
+        </select>
+      </div>
+
+      {visibles.length === 0 ? (
+        <div className="empty">
+          {filtro === "proximos" ? "No hay nada agendado para tus categorías todavía." : "No hay eventos para tus categorías."}
+        </div>
+      ) : (
+        visibles.map((e) => (
+          <div key={e.id} className="panel evento-fila">
+            <div className="evento-fila-info">
+              <div className="evento-fila-titulo">
+                <span className={"evento-tipo-pill evento-tipo-" + e.tipo}>{tipoEventoLabel(e.tipo)}</span>
+                {e.titulo}
+              </div>
+              <div className="muted" style={{ fontSize: 13 }}>
+                {formatDiaLargo(e.fecha)}
+                {[e.hora, e.lugar].filter(Boolean).length > 0 ? " · " + [e.hora, e.lugar].filter(Boolean).join(" · ") : ""}
+              </div>
+              {e.tipo === "partido" && (e.rival || e.horaConvocatoria || e.uniforme) && (
+                <div className="muted" style={{ fontSize: 13 }}>
+                  {[
+                    e.rival ? "Rival: " + e.rival : null,
+                    e.horaConvocatoria ? "Convocatoria: " + e.horaConvocatoria : null,
+                    e.uniforme ? "Uniforme: " + e.uniforme : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </div>
+              )}
+              {e.indicaciones && (
+                <div className="muted" style={{ fontSize: 13 }}>
+                  {e.indicaciones}
+                </div>
+              )}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 // Calendario operativo: grilla de mes estilo Google Calendar. Cada celda
 // muestra los eventos de ese día (como pastillas de color según el tipo);
 // al hacer clic en un día se selecciona y se abre el panel de abajo con el
@@ -5096,6 +5335,235 @@ function UniformesView({ alumnosActivos, onMarcarEntregado }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Staff: quién tiene acceso a la app, con qué rol, y (si es entrenador)
+// de qué categorías está a cargo. Crear el LOGIN sigue siendo manual en
+// Supabase (Authentication → Users) — esta pantalla es para todo lo demás:
+// completar sus datos, asignarle categorías, y activar/desactivar su
+// acceso sin tocar SQL.
+function StaffView({ staff, onNuevo, onEditar, onToggleActivo, onEliminar }) {
+  const activos = staff.filter((p) => p.activo).length;
+
+  return (
+    <div className="stack">
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#E7F7F1", color: "#158F63" }}>
+            <Users size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Staff con acceso activo</div>
+            <div className="kpi-value">{activos}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="toolbar">
+        <div />
+        <div className="toolbar-actions">
+          <button className="btn-primary" onClick={onNuevo}>
+            <Plus size={16} /> Agregar colaborador
+          </button>
+        </div>
+      </div>
+
+      {staff.length === 0 ? (
+        <div className="empty">
+          No hay nadie en Staff todavía. Primero crea su login en Supabase (Authentication → Users), y luego agrégalo aquí con el botón de arriba.
+        </div>
+      ) : (
+        <div className="panel">
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Nombre</th>
+                  <th>Rol</th>
+                  <th>Categorías</th>
+                  <th>Contacto</th>
+                  <th>Estado</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {staff.map((p) => (
+                  <tr key={p.id}>
+                    <td className="cell-title">{p.nombre || "(sin nombre)"}</td>
+                    <td>{rolLabel(p.rol)}</td>
+                    <td>
+                      {p.rol === "entrenador"
+                        ? p.categorias.length
+                          ? p.categorias.join(", ")
+                          : <span className="muted">Sin asignar</span>
+                        : <span className="muted">—</span>}
+                    </td>
+                    <td>
+                      {p.telefono || p.correo ? (
+                        <>
+                          {p.telefono}
+                          {p.telefono && p.correo ? " · " : ""}
+                          {p.correo}
+                        </>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className={"pill-toggle" + (p.activo ? " on" : " pill-ausente on")}
+                        onClick={() => onToggleActivo(p)}
+                      >
+                        {p.activo ? "Activo" : "Desactivado"}
+                      </button>
+                    </td>
+                    <td>
+                      <div className="actions">
+                        <button className="icon-btn" onClick={() => onEditar(p)} aria-label="Editar">
+                          <Pencil size={15} />
+                        </button>
+                        <button className="icon-btn" onClick={() => onEliminar(p)} aria-label="Eliminar">
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StaffModal({ initial, onSave, onCancel, enviando }) {
+  const esNuevo = !initial.id;
+  const [form, setForm] = useState({
+    id: initial.id || null,
+    id_nuevo: "",
+    nombre: initial.nombre || "",
+    rol: initial.rol || "entrenador",
+    telefono: initial.telefono || "",
+    correo: initial.correo || "",
+    categorias: initial.categorias || [],
+  });
+  const [error, setError] = useState(null);
+
+  function toggleCategoria(c) {
+    setForm((prev) => {
+      const set = new Set(prev.categorias);
+      if (set.has(c)) set.delete(c);
+      else set.add(c);
+      return { ...prev, categorias: Array.from(set) };
+    });
+  }
+
+  function handleSubmit(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!form.nombre.trim()) {
+      setError("Escribe su nombre.");
+      return;
+    }
+    if (esNuevo && !form.id_nuevo.trim()) {
+      setError("Pega el ID del usuario que ya creaste en Supabase (Authentication → Users → clic en la persona → \"User UID\").");
+      return;
+    }
+    setError(null);
+    onSave(form);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{esNuevo ? "Agregar colaborador" : "Editar colaborador"}</h3>
+          <button className="icon-btn" onClick={onCancel} aria-label="Cerrar">
+            <X size={18} />
+          </button>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="form">
+          {esNuevo && (
+            <label>
+              ID del usuario (de Supabase → Authentication → Users)
+              <input
+                type="text"
+                value={form.id_nuevo}
+                onChange={(e) => setForm({ ...form, id_nuevo: e.target.value })}
+                placeholder="Pega aquí el User UID — primero créale el login allá"
+                autoFocus
+              />
+            </label>
+          )}
+          <label>
+            Nombre
+            <input
+              type="text"
+              value={form.nombre}
+              onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+              autoFocus={!esNuevo}
+            />
+          </label>
+          <div className="form-row">
+            <label>
+              Rol
+              <select value={form.rol} onChange={(e) => setForm({ ...form, rol: e.target.value })}>
+                {ROLES_STAFF.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Teléfono
+              <input
+                type="tel"
+                value={form.telefono}
+                onChange={(e) => setForm({ ...form, telefono: e.target.value })}
+              />
+            </label>
+          </div>
+          <label>
+            Correo
+            <input
+              type="email"
+              value={form.correo}
+              onChange={(e) => setForm({ ...form, correo: e.target.value })}
+            />
+          </label>
+
+          {form.rol === "entrenador" && (
+            <div>
+              <div className="form-section-label">
+                Categorías a su cargo {form.categorias.length > 0 && `(${form.categorias.length})`}
+                {form.categorias.length === 0 && <span className="muted"> — sin asignar, no vería alumnos todavía</span>}
+              </div>
+              <div className="evento-convocados-lista">
+                {CATEGORIAS.map((c) => (
+                  <label key={c} className="checkbox-item">
+                    <input type="checkbox" checked={form.categorias.includes(c)} onChange={() => toggleCategoria(c)} />
+                    {c}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onCancel} disabled={enviando}>
+            Cancelar
+          </button>
+          <button className="btn-primary" onClick={handleSubmit} disabled={enviando}>
+            {enviando ? "Guardando…" : "Guardar"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
