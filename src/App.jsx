@@ -113,6 +113,7 @@ function alumnoFromDb(r) {
     numeroUniforme: r.numero_uniforme,
     tallaUniforme: r.talla_uniforme,
     uniformeEntregado: !!r.uniforme_entregado,
+    soloCampeonato: !!r.solo_campeonato,
   };
 }
 function alumnoToDb(a) {
@@ -124,7 +125,7 @@ function alumnoToDb(a) {
     telefono: a.telefono,
     categoria: a.categoria,
     horario: a.horario,
-    tarifa_mensual: Number(a.tarifaMensual) || 0,
+    tarifa_mensual: a.soloCampeonato ? 0 : Number(a.tarifaMensual) || 0,
     estado,
     becado,
     activo,
@@ -139,6 +140,7 @@ function alumnoToDb(a) {
     numero_uniforme: a.numeroUniforme === "" || a.numeroUniforme === undefined ? null : Number(a.numeroUniforme),
     talla_uniforme: a.tallaUniforme || null,
     uniforme_entregado: !!a.uniformeEntregado,
+    solo_campeonato: !!a.soloCampeonato,
   };
 }
 
@@ -471,6 +473,49 @@ function resultadoPartidoTipo(r) {
 function resultadoPartidoLabel(r) {
   const t = resultadoPartidoTipo(r);
   return t === "ganado" ? "Ganado" : t === "perdido" ? "Perdido" : "Empate";
+}
+
+// ---------- Campeonatos: inscripciones y cuota ----------
+function campeonatoFromDb(r) {
+  return {
+    id: r.id,
+    nombre: r.nombre,
+    fecha: r.fecha,
+    categorias: r.categorias || [],
+    notas: r.notas,
+  };
+}
+function campeonatoToDb(c) {
+  return {
+    nombre: c.nombre,
+    fecha: c.fecha || null,
+    categorias: c.categorias && c.categorias.length ? c.categorias : null,
+    notas: c.notas || null,
+  };
+}
+function inscripcionCampeonatoFromDb(r) {
+  return {
+    id: r.id,
+    campeonatoId: r.campeonato_id,
+    alumnoId: r.alumno_id,
+    montoCuota: Number(r.monto_cuota) || 0,
+    pagado: !!r.pagado,
+    fechaPago: r.fecha_pago,
+    nota: r.nota,
+  };
+}
+// Junta cada campeonato con su lista de inscripciones (llegan por
+// separado, de la tabla campeonato_inscripciones).
+function juntarCampeonatosConInscripciones(filasCampeonatos, filasInscripciones) {
+  const porCampeonato = {};
+  filasInscripciones.map(inscripcionCampeonatoFromDb).forEach((ins) => {
+    if (!porCampeonato[ins.campeonatoId]) porCampeonato[ins.campeonatoId] = [];
+    porCampeonato[ins.campeonatoId].push(ins);
+  });
+  return filasCampeonatos.map(campeonatoFromDb).map((c) => ({
+    ...c,
+    inscripciones: porCampeonato[c.id] || [],
+  }));
 }
 
 // Genera las fechas de las repeticiones de un evento (incluida la
@@ -1740,6 +1785,7 @@ const GRUPOS_NAV_ADMIN = [
       { key: "cobro", label: "Cobro mensual" },
       { key: "cartera", label: "Cartera" },
       { key: "margen", label: "Margen" },
+      { key: "campeonatos", label: "Campeonatos" },
     ],
   },
   {
@@ -1790,6 +1836,7 @@ const GRUPOS_NAV_ADMINISTRATIVO = [
       { key: "pago", label: "Registrar pago" },
       { key: "cobro", label: "Cobro mensual" },
       { key: "cartera", label: "Cartera" },
+      { key: "campeonatos", label: "Campeonatos" },
     ],
   },
   {
@@ -1906,6 +1953,8 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [convocatoriaModal, setConvocatoriaModal] = useState(null);
   const [filtroTipoEvento, setFiltroTipoEvento] = useState("");
   const [filtroCategoriaEvento, setFiltroCategoriaEvento] = useState("");
+  const [campeonatos, setCampeonatos] = useState([]);
+  const [campeonatoModal, setCampeonatoModal] = useState(null); // null | {} (nuevo) | campeonato (editar)
 
   const enviandoRef = React.useRef(false);
   const [enviando, setEnviando] = useState(false);
@@ -1938,13 +1987,15 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [confirmDeleteLead, setConfirmDeleteLead] = useState(null);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, l, c, s, ev] = await Promise.all([
+    const [a, p, l, c, s, ev, cp, ci] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("leads").select("*").order("created_at", { ascending: false }),
       supabase.from("cargos").select("*").order("created_at", { ascending: false }),
       supabase.from("asistencias").select("*").order("fecha", { ascending: false }),
       supabase.from("eventos").select("*").order("fecha", { ascending: true }),
+      supabase.from("campeonatos").select("*").order("fecha", { ascending: false }),
+      supabase.from("campeonato_inscripciones").select("*"),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -1952,6 +2003,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
     setCargos((c.data || []).map(cargoFromDb));
     setAsistencias((s.data || []).map(asistenciaFromDb));
     setEventos((ev.data || []).map(eventoFromDb));
+    setCampeonatos(juntarCampeonatosConInscripciones(cp.data || [], ci.data || []));
     if (!silent && !a.error && !p.error && !l.error) {
       showToast(`Datos actualizados: ${(a.data || []).length} alumnos, ${(l.data || []).length} leads.`);
     }
@@ -1966,6 +2018,8 @@ function PanelAdministrativo({ perfil, onLogout }) {
     const canal = supabase
       .channel("atletic-cambios-administrativo")
       .on("postgres_changes", { event: "*", schema: "public", table: "alumnos" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "campeonatos" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "campeonato_inscripciones" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "pagos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "cargos" }, () => cargarDatos({ silent: true }))
@@ -1980,8 +2034,12 @@ function PanelAdministrativo({ perfil, onLogout }) {
 
   const currentMonthKey = monthKeyOf(todayISO());
   const alumnosActivos = alumnos.filter((a) => a.activo !== false);
-  const becadosActivosCount = alumnosActivos.filter((a) => a.becado).length;
-  const pendientesGenerar = alumnosActivos.filter(
+  // Los alumnos "solo campeonato" no entrenan ni pagan mensualidad, así que
+  // quedan fuera del cobro mensual, la cartera y el margen — todo lo que
+  // depende de la tarifa mensual recurrente.
+  const alumnosMensuales = alumnosActivos.filter((a) => !a.soloCampeonato);
+  const becadosActivosCount = alumnosMensuales.filter((a) => a.becado).length;
+  const pendientesGenerar = alumnosMensuales.filter(
     (a) => !a.becado && a.ultimoMesCobrado !== mesCobroSeleccionado
   );
   const mesesCobroDisponibles = (() => {
@@ -2039,6 +2097,61 @@ function PanelAdministrativo({ perfil, onLogout }) {
 
   function noAutorizado() {
     showToast("No tienes permiso para eso. Pídele a un administrador.", true);
+  }
+
+  async function guardarCampeonato(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = campeonatoToDb(data);
+      const { error } = esNuevo
+        ? await supabase.from("campeonatos").insert([payload])
+        : await supabase.from("campeonatos").update(payload).eq("id", data.id);
+      if (error) {
+        showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+        return;
+      }
+      await cargarDatos({ silent: true });
+      setCampeonatoModal(null);
+      showToast(esNuevo ? "Campeonato creado." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function inscribirAlumnoCampeonato(campeonatoId, alumnoId, montoCuota) {
+    const { error } = await supabase
+      .from("campeonato_inscripciones")
+      .insert([{ campeonato_id: campeonatoId, alumno_id: alumnoId, monto_cuota: montoCuota }]);
+    if (error) {
+      showToast("No se pudo inscribir al alumno (revisa tu conexión). Inténtalo de nuevo.", true);
+      return;
+    }
+    await cargarDatos({ silent: true });
+    showToast("Alumno inscrito.");
+  }
+
+  async function actualizarInscripcionCampeonato(inscripcion, cambios) {
+    const payload = {};
+    if ("montoCuota" in cambios) payload.monto_cuota = cambios.montoCuota;
+    if ("pagado" in cambios) payload.pagado = cambios.pagado;
+    if ("fechaPago" in cambios) payload.fecha_pago = cambios.fechaPago;
+    const { error } = await supabase.from("campeonato_inscripciones").update(payload).eq("id", inscripcion.id);
+    if (error) {
+      showToast("No se pudo guardar el cambio (revisa tu conexión). Inténtalo de nuevo.", true);
+      return;
+    }
+    await cargarDatos({ silent: true });
+  }
+
+  async function eliminarInscripcionCampeonato(inscripcion) {
+    const { error } = await supabase.from("campeonato_inscripciones").delete().eq("id", inscripcion.id);
+    if (error) {
+      showToast("No se pudo quitar la inscripción (revisa tu conexión). Inténtalo de nuevo.", true);
+      return;
+    }
+    await cargarDatos({ silent: true });
+    showToast("Inscripción eliminada.");
   }
 
   async function registrarPago(e) {
@@ -2276,7 +2389,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
 
             {tab === "pago" && (
               <PagoView
-                alumnosActivos={alumnosActivos}
+                alumnosActivos={alumnosMensuales}
                 pagoForm={pagoForm}
                 setPagoForm={setPagoForm}
                 onSubmit={registrarPago}
@@ -2300,7 +2413,21 @@ function PanelAdministrativo({ perfil, onLogout }) {
               />
             )}
 
-            {tab === "cartera" && <CarteraView alumnosActivos={alumnosActivos} />}
+            {tab === "cartera" && <CarteraView alumnosActivos={alumnosMensuales} />}
+
+            {tab === "campeonatos" && (
+              <CampeonatosView
+                campeonatos={campeonatos}
+                alumnos={alumnos}
+                puedeEliminar={false}
+                onNuevo={() => setCampeonatoModal({})}
+                onEditar={(c) => setCampeonatoModal(c)}
+                onEliminar={noAutorizado}
+                onInscribir={inscribirAlumnoCampeonato}
+                onActualizarInscripcion={actualizarInscripcionCampeonato}
+                onEliminarInscripcion={eliminarInscripcionCampeonato}
+              />
+            )}
 
             {tab === "asistencia" && (
               <AsistenciaView
@@ -2349,6 +2476,15 @@ function PanelAdministrativo({ perfil, onLogout }) {
 
       {convocatoriaModal && (
         <ConvocatoriaModal evento={convocatoriaModal} alumnos={alumnos} onCerrar={() => setConvocatoriaModal(null)} />
+      )}
+
+      {campeonatoModal !== null && (
+        <CampeonatoModal
+          initial={campeonatoModal}
+          onSave={guardarCampeonato}
+          onCancel={() => setCampeonatoModal(null)}
+          enviando={enviando}
+        />
       )}
 
       {confirmCargo && (
@@ -2461,6 +2597,9 @@ function PanelAdmin({ perfil, onLogout }) {
   const [confirmDeleteSesion, setConfirmDeleteSesion] = useState(null);
   const [resultadoModal, setResultadoModal] = useState(null); // { evento, resultado } | null
   const [confirmDeleteResultado, setConfirmDeleteResultado] = useState(null);
+  const [campeonatos, setCampeonatos] = useState([]);
+  const [campeonatoModal, setCampeonatoModal] = useState(null); // null | {} (nuevo) | campeonato (editar)
+  const [confirmDeleteCampeonato, setConfirmDeleteCampeonato] = useState(null);
 
   // Cambia de tab abriendo también el grupo de la barra lateral al que
   // pertenece — para los accesos directos (ej. botones del Resumen) que no
@@ -2518,7 +2657,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [reloading, setReloading] = useState(false);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt] = await Promise.all([
+    const [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("cargos").select("*").order("created_at", { ascending: false }),
@@ -2534,6 +2673,8 @@ function PanelAdmin({ perfil, onLogout }) {
       supabase.from("resultados_partido").select("*"),
       supabase.from("partido_goles").select("*"),
       supabase.from("partido_tarjetas").select("*"),
+      supabase.from("campeonatos").select("*").order("fecha", { ascending: false }),
+      supabase.from("campeonato_inscripciones").select("*"),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -2547,8 +2688,9 @@ function PanelAdmin({ perfil, onLogout }) {
     setEjercicios((ej.data || []).map(ejercicioFromDb));
     setSesiones(juntarSesionesConEjercicios(se.data || [], sej.data || []));
     setResultados(juntarResultadosConDetalle(rp.data || [], pg.data || [], pt.data || []));
+    setCampeonatos(juntarCampeonatosConInscripciones(cp.data || [], ci.data || []));
 
-    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt].some((r) => r.error);
+    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci].some((r) => r.error);
     if (algunFallo) {
       showToast(
         "No se pudo cargar toda tu información (revisa tu conexión). Dale a \"Recargar\" para intentar de nuevo.",
@@ -2580,6 +2722,8 @@ function PanelAdmin({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "resultados_partido" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "partido_goles" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "partido_tarjetas" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "campeonatos" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "campeonato_inscripciones" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -2615,6 +2759,10 @@ function PanelAdmin({ perfil, onLogout }) {
   }
 
   const alumnosActivos = alumnos.filter((a) => a.activo !== false);
+  // Los alumnos "solo campeonato" no entrenan ni pagan mensualidad, así que
+  // quedan fuera del cobro mensual, la cartera y el margen — todo lo que
+  // depende de la tarifa mensual recurrente.
+  const alumnosMensuales = alumnosActivos.filter((a) => !a.soloCampeonato);
   const currentMonthKey = monthKeyOf(todayISO());
 
   const totalCobradoMes = useMemo(
@@ -2636,15 +2784,15 @@ function PanelAdmin({ perfil, onLogout }) {
   const utilidadMes = totalCobradoMes - totalGastosMes;
 
   const totalPorCobrar = useMemo(
-    () => alumnosActivos.reduce((s, a) => s + Math.max(0, Number(a.saldoPendiente || 0)), 0),
-    [alumnosActivos]
+    () => alumnosMensuales.reduce((s, a) => s + Math.max(0, Number(a.saldoPendiente || 0)), 0),
+    [alumnosMensuales]
   );
 
   const pagosHoy = pagos.filter((p) => p.fecha === todayISO()).length;
 
   // Los becados nunca entran al cobro mensual: no se les suma tarifa.
-  const becadosActivosCount = alumnosActivos.filter((a) => a.becado).length;
-  const pendientesGenerar = alumnosActivos.filter(
+  const becadosActivosCount = alumnosMensuales.filter((a) => a.becado).length;
+  const pendientesGenerar = alumnosMensuales.filter(
     (a) => !a.becado && a.ultimoMesCobrado !== mesCobroSeleccionado
   );
 
@@ -3058,6 +3206,77 @@ function PanelAdmin({ perfil, onLogout }) {
     }
   }
 
+  async function guardarCampeonato(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = campeonatoToDb(data);
+      const { error } = esNuevo
+        ? await supabase.from("campeonatos").insert([payload])
+        : await supabase.from("campeonatos").update(payload).eq("id", data.id);
+      if (error) {
+        showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+        return;
+      }
+      await cargarDatos({ silent: true });
+      setCampeonatoModal(null);
+      showToast(esNuevo ? "Campeonato creado." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarCampeonato(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("campeonatos").delete().eq("id", id);
+      setConfirmDeleteCampeonato(null);
+      if (!error) {
+        setCampeonatos((prev) => prev.filter((c) => c.id !== id));
+        showToast("Campeonato eliminado.");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function inscribirAlumnoCampeonato(campeonatoId, alumnoId, montoCuota) {
+    const { error } = await supabase
+      .from("campeonato_inscripciones")
+      .insert([{ campeonato_id: campeonatoId, alumno_id: alumnoId, monto_cuota: montoCuota }]);
+    if (error) {
+      showToast("No se pudo inscribir al alumno (revisa tu conexión). Inténtalo de nuevo.", true);
+      return;
+    }
+    await cargarDatos({ silent: true });
+    showToast("Alumno inscrito.");
+  }
+
+  async function actualizarInscripcionCampeonato(inscripcion, cambios) {
+    const payload = {};
+    if ("montoCuota" in cambios) payload.monto_cuota = cambios.montoCuota;
+    if ("pagado" in cambios) payload.pagado = cambios.pagado;
+    if ("fechaPago" in cambios) payload.fecha_pago = cambios.fechaPago;
+    const { error } = await supabase.from("campeonato_inscripciones").update(payload).eq("id", inscripcion.id);
+    if (error) {
+      showToast("No se pudo guardar el cambio (revisa tu conexión). Inténtalo de nuevo.", true);
+      return;
+    }
+    await cargarDatos({ silent: true });
+  }
+
+  async function eliminarInscripcionCampeonato(inscripcion) {
+    const { error } = await supabase.from("campeonato_inscripciones").delete().eq("id", inscripcion.id);
+    if (error) {
+      showToast("No se pudo quitar la inscripción (revisa tu conexión). Inténtalo de nuevo.", true);
+      return;
+    }
+    await cargarDatos({ silent: true });
+    showToast("Inscripción eliminada.");
+  }
+
   async function registrarPago(e) {
     if (e && e.preventDefault) e.preventDefault();
     if (!iniciarEnvio()) return; // ya hay un guardado en curso: ignora el clic repetido
@@ -3402,7 +3621,7 @@ function PanelAdmin({ perfil, onLogout }) {
     })
     .sort((a, b) => Number(b.saldoPendiente || 0) - Number(a.saldoPendiente || 0));
 
-  const conDeuda = alumnosActivos
+  const conDeuda = alumnosMensuales
     .filter((a) => Number(a.saldoPendiente || 0) > 0)
     .sort((a, b) => Number(b.saldoPendiente || 0) - Number(a.saldoPendiente || 0))
     .slice(0, 8);
@@ -3413,10 +3632,10 @@ function PanelAdmin({ perfil, onLogout }) {
   // seleccionado ahí), para avisar en el Resumen.
   const pendientesMesActual = useMemo(
     () =>
-      alumnosActivos
+      alumnosMensuales
         .filter((a) => !a.becado && a.ultimoMesCobrado !== currentMonthKey)
         .sort((a, b) => Number(b.saldoPendiente || 0) - Number(a.saldoPendiente || 0)),
-    [alumnosActivos, currentMonthKey]
+    [alumnosMensuales, currentMonthKey]
   );
 
   // Lo que los entrenadores van marcando en "Asistencia" se refleja aquí
@@ -3571,7 +3790,7 @@ function PanelAdmin({ perfil, onLogout }) {
 
             {tab === "pago" && (
               <PagoView
-                alumnosActivos={alumnosActivos}
+                alumnosActivos={alumnosMensuales}
                 pagoForm={pagoForm}
                 setPagoForm={setPagoForm}
                 onSubmit={registrarPago}
@@ -3608,7 +3827,7 @@ function PanelAdmin({ perfil, onLogout }) {
               />
             )}
 
-            {tab === "cartera" && <CarteraView alumnosActivos={alumnosActivos} />}
+            {tab === "cartera" && <CarteraView alumnosActivos={alumnosMensuales} />}
 
             {tab === "asistencia" && (
               <AsistenciaView
@@ -3624,7 +3843,7 @@ function PanelAdmin({ perfil, onLogout }) {
             )}
 
             {tab === "margen" && (
-              <MargenView alumnosActivos={alumnosActivos} totalGastosMes={totalGastosMes} monthLabelStr={monthLabel(currentMonthKey)} />
+              <MargenView alumnosActivos={alumnosMensuales} totalGastosMes={totalGastosMes} monthLabelStr={monthLabel(currentMonthKey)} />
             )}
 
             {tab === "crm" && (
@@ -3700,6 +3919,20 @@ function PanelAdmin({ perfil, onLogout }) {
                 onRegistrar={(evento) => setResultadoModal({ evento, resultado: null })}
                 onEditar={(evento, resultado) => setResultadoModal({ evento, resultado })}
                 onEliminar={(r) => setConfirmDeleteResultado(r)}
+              />
+            )}
+
+            {tab === "campeonatos" && (
+              <CampeonatosView
+                campeonatos={campeonatos}
+                alumnos={alumnos}
+                puedeEliminar
+                onNuevo={() => setCampeonatoModal({})}
+                onEditar={(c) => setCampeonatoModal(c)}
+                onEliminar={(c) => setConfirmDeleteCampeonato(c)}
+                onInscribir={inscribirAlumnoCampeonato}
+                onActualizarInscripcion={actualizarInscripcionCampeonato}
+                onEliminarInscripcion={eliminarInscripcionCampeonato}
               />
             )}
           </>
@@ -3781,6 +4014,26 @@ function PanelAdmin({ perfil, onLogout }) {
           danger
           onConfirm={() => eliminarResultado(confirmDeleteResultado.id)}
           onCancel={() => setConfirmDeleteResultado(null)}
+          disabled={enviando}
+        />
+      )}
+
+      {campeonatoModal !== null && (
+        <CampeonatoModal
+          initial={campeonatoModal}
+          onSave={guardarCampeonato}
+          onCancel={() => setCampeonatoModal(null)}
+          enviando={enviando}
+        />
+      )}
+      {confirmDeleteCampeonato && (
+        <ConfirmDialog
+          title={`¿Eliminar el campeonato "${confirmDeleteCampeonato.nombre}"?`}
+          body="Se borran también todas sus inscripciones y el registro de cuotas pagadas/pendientes. No podrá deshacerse."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarCampeonato(confirmDeleteCampeonato.id)}
+          onCancel={() => setConfirmDeleteCampeonato(null)}
           disabled={enviando}
         />
       )}
@@ -4345,6 +4598,7 @@ function AlumnosView({
                             {a.nombre}
                             {a.numeroUniforme != null && <span className="badge-numero">#{a.numeroUniforme}</span>}
                             {a.becado && <span className="badge-becado">Becado</span>}
+                            {a.soloCampeonato && <span className="badge-campeonato">Solo campeonato</span>}
                           </div>
                           <div className="cell-sub">{a.telefono || ""}</div>
                         </div>
@@ -4353,9 +4607,11 @@ function AlumnosView({
                     <td>{a.categoria}</td>
                     <td>{a.horario}</td>
                     <td>{a.encargado || "—"}</td>
-                    <td className="num">{a.becado ? "—" : formatQ(a.tarifaMensual)}</td>
+                    <td className="num">{a.soloCampeonato || a.becado ? "—" : formatQ(a.tarifaMensual)}</td>
                     <td className="num">
-                      {a.becado ? (
+                      {a.soloCampeonato ? (
+                        <span className="muted">—</span>
+                      ) : a.becado ? (
                         <span className="badge" style={{ color: "#0090C2", background: "#E7F7FD" }}>
                           Sin cobro
                         </span>
@@ -5882,6 +6138,289 @@ function ResultadoModal({ evento, initial, alumnosDisponibles, onSave, onCancel,
   );
 }
 
+// Lista de campeonatos con sus inscripciones (master-detail: se hace clic
+// en un campeonato para desplegar sus inscritos debajo). Cada inscripción
+// tiene su propia cuota (puede variar de un alumno a otro) y si ya la
+// pagó. Sirve tanto para alumnos regulares como para los marcados "solo
+// campeonato" — cualquiera puede inscribirse.
+function CampeonatosView({
+  campeonatos,
+  alumnos,
+  puedeEliminar,
+  onNuevo,
+  onEditar,
+  onEliminar,
+  onInscribir,
+  onActualizarInscripcion,
+  onEliminarInscripcion,
+}) {
+  const [campeonatoAbiertoId, setCampeonatoAbiertoId] = useState(null);
+  const [alumnoAInscribir, setAlumnoAInscribir] = useState("");
+  const [montoInscribir, setMontoInscribir] = useState("");
+
+  const campeonatoAbierto = campeonatos.find((c) => c.id === campeonatoAbiertoId) || null;
+
+  const alumnosDisponiblesParaInscribir = useMemo(() => {
+    if (!campeonatoAbierto) return [];
+    const yaInscritos = new Set(campeonatoAbierto.inscripciones.map((i) => i.alumnoId));
+    return alumnos.filter((a) => !yaInscritos.has(a.id)).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [campeonatoAbierto, alumnos]);
+
+  function alumnoNombre(id) {
+    return (alumnos.find((a) => a.id === id) || {}).nombre || "(alumno eliminado)";
+  }
+
+  function handleInscribir() {
+    if (!alumnoAInscribir || !campeonatoAbierto) return;
+    const monto = parseMonto(montoInscribir);
+    onInscribir(campeonatoAbierto.id, alumnoAInscribir, isNaN(monto) ? 0 : monto);
+    setAlumnoAInscribir("");
+    setMontoInscribir("");
+  }
+
+  return (
+    <div className="stack">
+      <div className="toolbar">
+        <div />
+        <button className="btn-primary" onClick={onNuevo}>
+          <Plus size={16} /> Nuevo campeonato
+        </button>
+      </div>
+
+      {campeonatos.length === 0 ? (
+        <div className="empty">
+          Todavía no hay campeonatos registrados. Agrega el primero con el botón de arriba.
+        </div>
+      ) : (
+        <div className="stack" style={{ gap: 10 }}>
+          {campeonatos.map((c) => {
+            const total = c.inscripciones.length;
+            const pagados = c.inscripciones.filter((i) => i.pagado).length;
+            const recaudado = c.inscripciones.filter((i) => i.pagado).reduce((s, i) => s + i.montoCuota, 0);
+            const pendiente = c.inscripciones.filter((i) => !i.pagado).reduce((s, i) => s + i.montoCuota, 0);
+            const abierto = campeonatoAbiertoId === c.id;
+            return (
+              <div key={c.id} className="panel">
+                <div className="evento-fila" style={{ padding: 0 }}>
+                  <div
+                    className="evento-fila-info"
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setCampeonatoAbiertoId(abierto ? null : c.id)}
+                  >
+                    <div className="evento-fila-titulo">
+                      {abierto ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      {c.nombre}
+                    </div>
+                    <div className="muted" style={{ fontSize: 13 }}>
+                      {c.fecha ? formatDiaLargo(c.fecha) : "Sin fecha"}
+                      {(c.categorias || []).length ? " · " + c.categorias.join(", ") : ""}
+                      {" · " + total + " inscrito" + (total === 1 ? "" : "s") + " (" + pagados + " pagado" + (pagados === 1 ? "" : "s") + ")"}
+                    </div>
+                    {total > 0 && (
+                      <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+                        Recaudado {formatQ(recaudado)}
+                        {pendiente > 0 ? " · pendiente " + formatQ(pendiente) : ""}
+                      </div>
+                    )}
+                  </div>
+                  <div className="actions">
+                    <button className="icon-btn" onClick={() => onEditar(c)} aria-label="Editar">
+                      <Pencil size={15} />
+                    </button>
+                    {puedeEliminar && (
+                      <button className="icon-btn" onClick={() => onEliminar(c)} aria-label="Eliminar">
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {abierto && (
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border-soft)" }}>
+                    {c.inscripciones.length === 0 ? (
+                      <div className="empty" style={{ padding: 14 }}>
+                        Todavía no hay alumnos inscritos.
+                      </div>
+                    ) : (
+                      <div className="table-scroll">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>Alumno</th>
+                              <th className="num">Cuota</th>
+                              <th>Estado</th>
+                              <th></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {c.inscripciones.map((ins) => (
+                              <tr key={ins.id}>
+                                <td className="cell-title">{alumnoNombre(ins.alumnoId)}</td>
+                                <td className="num">
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    style={{ width: 90, textAlign: "right" }}
+                                    defaultValue={ins.montoCuota}
+                                    onBlur={(e) => {
+                                      const monto = parseMonto(e.target.value);
+                                      if (!isNaN(monto) && monto >= 0 && monto !== ins.montoCuota) {
+                                        onActualizarInscripcion(ins, { montoCuota: monto });
+                                      }
+                                    }}
+                                  />
+                                </td>
+                                <td>
+                                  <button
+                                    className="badge"
+                                    style={
+                                      ins.pagado
+                                        ? { color: "#158F63", background: "#E7F7F1", cursor: "pointer", border: "none" }
+                                        : { color: "#B4790A", background: "#FCF1DD", cursor: "pointer", border: "none" }
+                                    }
+                                    onClick={() =>
+                                      onActualizarInscripcion(ins, {
+                                        pagado: !ins.pagado,
+                                        fechaPago: !ins.pagado ? todayISO() : null,
+                                      })
+                                    }
+                                  >
+                                    {ins.pagado ? "Pagado" : "Pendiente"}
+                                  </button>
+                                </td>
+                                <td className="actions">
+                                  <button className="icon-btn" onClick={() => onEliminarInscripcion(ins)} aria-label="Quitar">
+                                    <Trash2 size={15} />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    <div className="form-row" style={{ marginTop: 10 }}>
+                      <select value={alumnoAInscribir} onChange={(e) => setAlumnoAInscribir(e.target.value)}>
+                        <option value="">
+                          {alumnosDisponiblesParaInscribir.length === 0 ? "No hay más alumnos para inscribir" : "Elige un alumno…"}
+                        </option>
+                        {alumnosDisponiblesParaInscribir.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.nombre}
+                            {a.soloCampeonato ? " (solo campeonato)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="Cuota (Q)"
+                        style={{ maxWidth: 120 }}
+                        value={montoInscribir}
+                        onChange={(e) => setMontoInscribir(e.target.value)}
+                      />
+                      <button type="button" className="btn-secondary" onClick={handleInscribir} disabled={!alumnoAInscribir}>
+                        <Plus size={15} /> Inscribir
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CampeonatoModal({ initial, onSave, onCancel, enviando }) {
+  const [form, setForm] = useState({
+    id: initial.id || null,
+    nombre: initial.nombre || "",
+    fecha: initial.fecha || "",
+    categorias: initial.categorias || [],
+    notas: initial.notas || "",
+  });
+  const [error, setError] = useState(null);
+
+  function toggleCategoria(c) {
+    setForm((prev) => {
+      const set = new Set(prev.categorias);
+      if (set.has(c)) set.delete(c);
+      else set.add(c);
+      return { ...prev, categorias: Array.from(set) };
+    });
+  }
+
+  function handleSubmit(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!form.nombre.trim()) {
+      setError("Escribe el nombre del campeonato.");
+      return;
+    }
+    setError(null);
+    onSave(form);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{form.id ? "Editar campeonato" : "Nuevo campeonato"}</h3>
+          <button className="icon-btn" onClick={onCancel} aria-label="Cerrar">
+            <X size={18} />
+          </button>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="form">
+          <label>
+            Nombre
+            <input
+              type="text"
+              value={form.nombre}
+              onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+              placeholder="Ej: Copa Interligas 2026"
+              autoFocus
+            />
+          </label>
+          <label>
+            Fecha (opcional)
+            <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
+          </label>
+          <div>
+            <div className="form-section-label">
+              Categorías {form.categorias.length > 0 && `(${form.categorias.length})`}
+              {form.categorias.length === 0 && <span className="muted"> — ninguna elegida = aplica a todas</span>}
+            </div>
+            <div className="evento-convocados-lista">
+              {CATEGORIAS.map((c) => (
+                <label key={c} className="checkbox-item">
+                  <input type="checkbox" checked={form.categorias.includes(c)} onChange={() => toggleCategoria(c)} />
+                  {c}
+                </label>
+              ))}
+            </div>
+          </div>
+          <label>
+            Notas (opcional)
+            <textarea rows={2} value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} />
+          </label>
+        </div>
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onCancel} disabled={enviando}>
+            Cancelar
+          </button>
+          <button className="btn-primary" onClick={handleSubmit} disabled={enviando}>
+            {enviando ? "Guardando…" : "Guardar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Calendario operativo: grilla de mes estilo Google Calendar. Cada celda
 // muestra los eventos de ese día (como pastillas de color según el tipo);
 // al hacer clic en un día se selecciona y se abre el panel de abajo con el
@@ -7329,6 +7868,7 @@ function AlumnoModal({ initial, onSave, onCancel, enviando, showToast }) {
     numeroUniforme: initial.numeroUniforme != null ? String(initial.numeroUniforme) : "",
     tallaUniforme: initial.tallaUniforme || "",
     uniformeEntregado: !!initial.uniformeEntregado,
+    soloCampeonato: !!initial.soloCampeonato,
   });
   const [error, setError] = useState(null);
   const [subiendoFoto, setSubiendoFoto] = useState(false);
@@ -7398,9 +7938,12 @@ function AlumnoModal({ initial, onSave, onCancel, enviando, showToast }) {
     if (e && e.preventDefault) e.preventDefault();
     const problemas = [];
     if (!form.nombre.trim()) problemas.push("Escribe el nombre del alumno.");
-    const tarifaNum = parseMonto(form.tarifaMensual);
-    if (form.tarifaMensual === "" || isNaN(tarifaNum) || tarifaNum < 0) {
-      problemas.push("Ingresa una tarifa mensual válida (por ejemplo 425 o 425.00).");
+    let tarifaNum = 0;
+    if (!form.soloCampeonato) {
+      tarifaNum = parseMonto(form.tarifaMensual);
+      if (form.tarifaMensual === "" || isNaN(tarifaNum) || tarifaNum < 0) {
+        problemas.push("Ingresa una tarifa mensual válida (por ejemplo 425 o 425.00).");
+      }
     }
     if (problemas.length > 0) {
       setError(problemas.join(" "));
@@ -7503,16 +8046,26 @@ function AlumnoModal({ initial, onSave, onCancel, enviando, showToast }) {
               </select>
             </label>
           </div>
-          <label>
-            Tarifa mensual
+          <label className="checkbox-item" style={{ border: "1px solid var(--border-soft)", borderRadius: 10 }}>
             <input
-              type="text"
-              inputMode="decimal"
-              placeholder="0.00"
-              value={form.tarifaMensual}
-              onChange={(e) => setForm({ ...form, tarifaMensual: e.target.value })}
+              type="checkbox"
+              checked={form.soloCampeonato}
+              onChange={(e) => setForm({ ...form, soloCampeonato: e.target.checked })}
             />
+            Solo campeonato (no entrena ni paga mensualidad — solo la cuota del campeonato en que participe)
           </label>
+          {!form.soloCampeonato && (
+            <label>
+              Tarifa mensual
+              <input
+                type="text"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={form.tarifaMensual}
+                onChange={(e) => setForm({ ...form, tarifaMensual: e.target.value })}
+              />
+            </label>
+          )}
           <label>
             Estado
             <select
@@ -8119,6 +8672,7 @@ function Styles() {
       .cell-title { font-weight: 500; color: var(--charcoal); }
       .badge-becado { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; color: #B4790A; background: #FCF1DD; padding: 1.5px 7px; border-radius: var(--radius-pill); vertical-align: middle; }
       .badge-numero { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; color: #6C6F72; background: #EFEFF0; padding: 1.5px 7px; border-radius: var(--radius-pill); vertical-align: middle; }
+      .badge-campeonato { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; color: #0090C2; background: #E7F7FD; padding: 1.5px 7px; border-radius: var(--radius-pill); vertical-align: middle; }
 
       .cell-alumno { display: flex; align-items: center; gap: 10px; }
       .avatar-alumno { border-radius: 50%; object-fit: cover; flex-shrink: 0; }
@@ -8131,8 +8685,15 @@ function Styles() {
       .cell-sub { font-size: 12px; color: #8A8D90; margin-top: 1px; }
 
       /* Calendario operativo */
-      .checkbox-item { display: flex; align-items: center; gap: 8px; font-weight: 400; font-size: 14px; padding: 4px 0; }
-      .evento-convocados-lista { max-height: 220px; overflow-y: auto; border: 1px solid var(--border-soft); border-radius: 10px; padding: 8px 12px; margin-top: 6px; }
+      /* Checkboxes: en vez del cuadrito gris del sistema operativo, se ven
+         en el azul de marca (accent-color, soportado por todos los
+         navegadores modernos) y cada fila de "checkbox-item" (categorías,
+         convocados, etc.) resalta al pasar el mouse para que se note que
+         es clicable. */
+      input[type="checkbox"] { accent-color: var(--blue); width: 17px; height: 17px; cursor: pointer; flex-shrink: 0; }
+      .checkbox-item { display: flex; align-items: center; gap: 9px; font-weight: 400; font-size: 14px; padding: 7px 9px; border-radius: 8px; cursor: pointer; transition: background 0.12s; }
+      .checkbox-item:hover { background: #F4F6F7; }
+      .evento-convocados-lista { max-height: 220px; overflow-y: auto; border: 1px solid var(--border-soft); border-radius: 10px; padding: 6px 10px; margin-top: 6px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0 6px; }
       .evento-fila { display: flex; align-items: center; gap: 14px; padding: 12px 14px; }
       .evento-fila-fecha { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 46px; flex-shrink: 0; background: var(--bg-soft, #F4F6F8); border-radius: 8px; padding: 6px 0; }
       .evento-fila-dia { font-size: 18px; font-weight: 700; color: var(--charcoal); line-height: 1; }
