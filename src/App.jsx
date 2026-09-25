@@ -545,38 +545,61 @@ function inventarioToDb(i) {
 }
 
 // ---------- Evaluaciones deportivas ----------
-// Cada evaluación califica a un alumno en 4 dimensiones (1 a 5): técnica,
-// físico, táctico y actitud. "categoria" se guarda como snapshot (la
-// categoría del alumno al momento de evaluar) para que el historial no
-// cambie si el alumno luego sube de categoría.
+// Cada evaluación califica a un alumno en 8 áreas fijas (ver
+// AREAS_EVALUACION), en escala de 3 niveles (muy_bien/bien/en_proceso),
+// para un periodo dado (trimestral general, un bloque de entrenamientos, o
+// un campeonato puntual — "nombreEvento" es el nombre libre de ese
+// periodo/torneo). "categoria" se guarda como snapshot (la categoría del
+// alumno al momento de evaluar) para que el historial no cambie si el
+// alumno luego sube de categoría. "loMejor" y "aTrabajar" son texto libre
+// del entrenador (mismo formato que la evaluación en papel/infografía que
+// ya usa la academia).
 function evaluacionFromDb(r) {
+  const areas = {};
+  AREAS_EVALUACION.forEach((a) => {
+    areas[a.key] = r[a.key] || null;
+  });
   return {
     id: r.id,
     alumnoId: r.alumno_id,
     entrenadorId: r.entrenador_id,
     fecha: r.fecha,
     categoria: r.categoria,
-    tecnica: Number(r.tecnica) || 0,
-    fisico: Number(r.fisico) || 0,
-    tactico: Number(r.tactico) || 0,
-    actitud: Number(r.actitud) || 0,
-    comentarios: r.comentarios,
+    tipo: r.tipo || "trimestral",
+    nombreEvento: r.nombre_evento,
+    asistencia: r.asistencia,
+    areas,
+    loMejor: Array.isArray(r.lo_mejor) ? r.lo_mejor : [],
+    aTrabajar: Array.isArray(r.a_trabajar) ? r.a_trabajar : [],
+    comentario: r.comentario,
   };
 }
 function evaluacionToDb(e) {
-  return {
+  const payload = {
     alumno_id: e.alumnoId,
     fecha: e.fecha || todayISO(),
     categoria: e.categoria || null,
-    tecnica: Number(e.tecnica) || 3,
-    fisico: Number(e.fisico) || 3,
-    tactico: Number(e.tactico) || 3,
-    actitud: Number(e.actitud) || 3,
-    comentarios: e.comentarios || null,
+    tipo: e.tipo || "trimestral",
+    nombre_evento: e.nombreEvento || null,
+    asistencia: e.asistencia || null,
+    lo_mejor: e.loMejor || [],
+    a_trabajar: e.aTrabajar || [],
+    comentario: e.comentario || null,
   };
+  AREAS_EVALUACION.forEach((a) => {
+    payload[a.key] = (e.areas && e.areas[a.key]) || null;
+  });
+  return payload;
 }
-function promedioEvaluacion(e) {
-  return (Number(e.tecnica) + Number(e.fisico) + Number(e.tactico) + Number(e.actitud)) / 4;
+// Cuenta cuántas de las 8 áreas quedaron calificadas en cada nivel (para
+// mostrar un resumen rápido en la lista, ej. "5 muy bien · 2 bien").
+function resumenNivelesEvaluacion(e) {
+  const conteo = { muy_bien: 0, bien: 0, en_proceso: 0 };
+  AREAS_EVALUACION.forEach((a) => {
+    const v = e.areas && e.areas[a.key];
+    if (v && conteo[v] != null) conteo[v]++;
+  });
+  return conteo;
 }
 
 // Genera las fechas de las repeticiones de un evento (incluida la
@@ -949,13 +972,40 @@ const CATEGORIAS_INVENTARIO = [
 // sin sede se entiende como de uso general/compartido entre sedes.
 const SEDES = ["Hacienda Real", "Colegio Discovery"];
 
-// Dimensiones que califica cada evaluación deportiva, de 1 (bajo) a 5 (alto).
-const DIMENSIONES_EVALUACION = [
-  { key: "tecnica", label: "Técnica" },
-  { key: "fisico", label: "Físico" },
-  { key: "tactico", label: "Táctico" },
-  { key: "actitud", label: "Actitud" },
+// Las 8 áreas fijas que califica la evaluación deportiva (mismo formato
+// que la infografía en papel que ya usa la academia). Título y descripción
+// se muestran tal cual en el formulario, la lista y el reporte imprimible.
+const AREAS_EVALUACION = [
+  { key: "control_balon", titulo: "Control de balón", descripcion: "Puede recibir y controlar el balón." },
+  { key: "conduccion", titulo: "Conducción", descripcion: "Lleva el balón con control y puede cambiar de dirección." },
+  { key: "pase", titulo: "Pase", descripcion: "Busca a sus compañeros y realiza pases con intención." },
+  { key: "finalizacion", titulo: "Finalización (tiro al arco)", descripcion: "Intenta rematar y aprovechar oportunidades de gol." },
+  { key: "ubicacion_cancha", titulo: "Ubicación en cancha", descripcion: "Comprende dónde colocarse para ayudar a su equipo." },
+  { key: "ataque_defensa", titulo: "Ataque y defensa", descripcion: "Reacciona cuando el equipo gana o pierde el balón." },
+  { key: "juego_equipo", titulo: "Juego en equipo", descripcion: "Comparte el balón y ayuda a sus compañeros." },
+  { key: "actitud_esfuerzo", titulo: "Actitud y esfuerzo", descripcion: "Se esfuerza, escucha y continúa intentando aunque se equivoque." },
 ];
+
+// Escala de 3 niveles en la que se califica cada área.
+const NIVELES_EVALUACION = [
+  { value: "muy_bien", label: "Muy bien", descripcion: "Lo realiza con seguridad y frecuencia.", color: "#158F63", bg: "#E7F7F1" },
+  { value: "bien", label: "Bien", descripcion: "Lo está haciendo correctamente, pero puede seguir mejorando.", color: "#0090C2", bg: "#E7F7FD" },
+  { value: "en_proceso", label: "En proceso", descripcion: "Necesita más práctica y acompañamiento para fortalecerlo.", color: "#B4790A", bg: "#FCF1DD" },
+];
+function nivelEvaluacionInfo(value) {
+  return NIVELES_EVALUACION.find((n) => n.value === value) || null;
+}
+
+// A qué periodo corresponde la evaluación.
+const TIPOS_EVALUACION = [
+  { value: "trimestral", label: "Trimestral general", placeholderEvento: "Ej: 3er trimestre 2026" },
+  { value: "entrenamiento", label: "Entrenamientos", placeholderEvento: "Ej: Agosto - septiembre 2026" },
+  { value: "campeonato", label: "Campeonato", placeholderEvento: "Ej: FUTECA CAYALÁ" },
+];
+function tipoEvaluacionLabel(v) {
+  const t = TIPOS_EVALUACION.find((x) => x.value === v);
+  return t ? t.label : v || "—";
+}
 
 // Motivos de ausencia: opciones fijas que pidió el dueño, en este orden
 // exacto ("Otro" se agregó como comodín para casos que no encajen en las
@@ -1218,6 +1268,7 @@ function PanelEntrenador({ perfil, onLogout }) {
   const [evaluaciones, setEvaluaciones] = useState([]);
   const [evaluacionModal, setEvaluacionModal] = useState(null); // null | {} (nueva) | evaluación (editar)
   const [confirmDeleteEvaluacion, setConfirmDeleteEvaluacion] = useState(null);
+  const [reporteEvaluacion, setReporteEvaluacion] = useState(null); // { evaluacion, alumno, entrenadorNombre } | null
 
   const enviandoRef = React.useRef(false);
   const [enviando, setEnviando] = useState(false);
@@ -1641,6 +1692,13 @@ function PanelEntrenador({ perfil, onLogout }) {
                 onNuevo={() => setEvaluacionModal({})}
                 onEditar={(ev) => setEvaluacionModal(ev)}
                 onEliminar={(ev) => setConfirmDeleteEvaluacion(ev)}
+                onImprimir={(ev) =>
+                  setReporteEvaluacion({
+                    evaluacion: ev,
+                    alumno: alumnos.find((a) => a.id === ev.alumnoId),
+                    entrenadorNombre: perfil.nombre,
+                  })
+                }
               />
             )}
           </>
@@ -1732,6 +1790,14 @@ function PanelEntrenador({ perfil, onLogout }) {
           onConfirm={() => eliminarEvaluacion(confirmDeleteEvaluacion.id)}
           onCancel={() => setConfirmDeleteEvaluacion(null)}
           disabled={enviando}
+        />
+      )}
+      {reporteEvaluacion && (
+        <ReporteEvaluacionModal
+          evaluacion={reporteEvaluacion.evaluacion}
+          alumno={reporteEvaluacion.alumno}
+          entrenadorNombre={reporteEvaluacion.entrenadorNombre}
+          onCancel={() => setReporteEvaluacion(null)}
         />
       )}
 
@@ -2814,6 +2880,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [evaluaciones, setEvaluaciones] = useState([]);
   const [evaluacionModal, setEvaluacionModal] = useState(null); // null | {} (nueva) | evaluación (editar)
   const [confirmDeleteEvaluacion, setConfirmDeleteEvaluacion] = useState(null);
+  const [reporteEvaluacion, setReporteEvaluacion] = useState(null); // { evaluacion, alumno, entrenadorNombre } | null
 
   // Cambia de tab abriendo también el grupo de la barra lateral al que
   // pertenece — para los accesos directos (ej. botones del Resumen) que no
@@ -4237,6 +4304,13 @@ function PanelAdmin({ perfil, onLogout }) {
                 onNuevo={() => setEvaluacionModal({})}
                 onEditar={(ev) => setEvaluacionModal(ev)}
                 onEliminar={(ev) => setConfirmDeleteEvaluacion(ev)}
+                onImprimir={(ev) =>
+                  setReporteEvaluacion({
+                    evaluacion: ev,
+                    alumno: alumnos.find((a) => a.id === ev.alumnoId),
+                    entrenadorNombre: (staff.find((p) => p.id === ev.entrenadorId) || {}).nombre,
+                  })
+                }
               />
             )}
 
@@ -4394,6 +4468,14 @@ function PanelAdmin({ perfil, onLogout }) {
           onConfirm={() => eliminarEvaluacion(confirmDeleteEvaluacion.id)}
           onCancel={() => setConfirmDeleteEvaluacion(null)}
           disabled={enviando}
+        />
+      )}
+      {reporteEvaluacion && (
+        <ReporteEvaluacionModal
+          evaluacion={reporteEvaluacion.evaluacion}
+          alumno={reporteEvaluacion.alumno}
+          entrenadorNombre={reporteEvaluacion.entrenadorNombre}
+          onCancel={() => setReporteEvaluacion(null)}
         />
       )}
 
@@ -7021,44 +7103,49 @@ function InventarioModal({ initial, onSave, onCancel, enviando }) {
   );
 }
 
-// Selector de calificación 1 a 5 (chips numerados en vez de un <select>,
-// para calificar rápido desde el celular en la cancha).
-function RatingChips({ value, onChange }) {
+// Selector de nivel por área (3 botones en vez de un <select>, para
+// calificar rápido desde el celular en la cancha). Un segundo clic sobre
+// el mismo nivel lo quita (queda "sin calificar").
+function NivelChips({ value, onChange }) {
   return (
-    <div className="rating-chips">
-      {[1, 2, 3, 4, 5].map((n) => (
+    <div className="nivel-chips">
+      {NIVELES_EVALUACION.map((n) => (
         <button
           type="button"
-          key={n}
-          className={"rating-chip" + (n <= value ? " active" : "")}
-          onClick={() => onChange(n)}
-          aria-label={`Calificar ${n} de 5`}
+          key={n.value}
+          className={"nivel-chip" + (value === n.value ? " active" : "")}
+          style={value === n.value ? { background: n.color, borderColor: n.color, color: "#fff" } : {}}
+          onClick={() => onChange(value === n.value ? null : n.value)}
         >
-          {n}
+          {n.label}
         </button>
       ))}
     </div>
   );
 }
 
-// Puntitos de solo lectura para mostrar una calificación en una lista sin
-// ocupar tanto espacio como los RatingChips (que son para el formulario).
-function RatingDots({ value }) {
+// Puntito de solo lectura para mostrar el nivel de un área en una lista.
+function NivelDot({ value }) {
+  const info = nivelEvaluacionInfo(value);
   return (
-    <span className="rating-dots" aria-label={`${value} de 5`}>
-      {[1, 2, 3, 4, 5].map((n) => (
-        <span key={n} className={"rating-dot" + (n <= value ? " filled" : "")} />
-      ))}
-    </span>
+    <span
+      className="nivel-dot"
+      style={{ background: info ? info.color : "#E3E6E8" }}
+      title={info ? info.label : "Sin calificar"}
+    />
   );
 }
 
-// Lista de evaluaciones deportivas (una por alumno por fecha). Se puede
-// filtrar por alumno. "mostrarEntrenador" (vista admin) agrega quién la
+// Lista de evaluaciones deportivas. Se puede filtrar por alumno y por tipo
+// de periodo; cada fila se expande al hacer clic para ver el detalle
+// completo (áreas, fortalezas, puntos a trabajar y comentario) sin salir
+// de la lista. "mostrarEntrenador" (vista admin) agrega quién la
 // registró; el entrenador solo ve y administra las suyas (ya limitado por
 // las políticas de la base de datos).
-function EvaluacionesView({ evaluaciones, alumnos, staffNombre, mostrarEntrenador, onNuevo, onEditar, onEliminar }) {
+function EvaluacionesView({ evaluaciones, alumnos, staffNombre, mostrarEntrenador, onNuevo, onEditar, onEliminar, onImprimir }) {
   const [filtroAlumno, setFiltroAlumno] = useState("");
+  const [filtroTipo, setFiltroTipo] = useState("");
+  const [abiertaId, setAbiertaId] = useState(null);
 
   const alumnosConEvaluacion = useMemo(() => {
     const ids = new Set(evaluaciones.map((e) => e.alumnoId));
@@ -7068,8 +7155,9 @@ function EvaluacionesView({ evaluaciones, alumnos, staffNombre, mostrarEntrenado
   const lista = useMemo(() => {
     return evaluaciones
       .filter((e) => (filtroAlumno ? e.alumnoId === filtroAlumno : true))
+      .filter((e) => (filtroTipo ? e.tipo === filtroTipo : true))
       .sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
-  }, [evaluaciones, filtroAlumno]);
+  }, [evaluaciones, filtroAlumno, filtroTipo]);
 
   function nombreAlumno(id) {
     const a = alumnos.find((x) => x.id === id);
@@ -7079,14 +7167,24 @@ function EvaluacionesView({ evaluaciones, alumnos, staffNombre, mostrarEntrenado
   return (
     <div className="stack">
       <div className="toolbar">
-        <select value={filtroAlumno} onChange={(e) => setFiltroAlumno(e.target.value)}>
-          <option value="">Todos los alumnos</option>
-          {alumnosConEvaluacion.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.nombre}
-            </option>
-          ))}
-        </select>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select value={filtroAlumno} onChange={(e) => setFiltroAlumno(e.target.value)}>
+            <option value="">Todos los alumnos</option>
+            {alumnosConEvaluacion.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.nombre}
+              </option>
+            ))}
+          </select>
+          <select value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)}>
+            <option value="">Todos los periodos</option>
+            {TIPOS_EVALUACION.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <button className="btn-primary" onClick={onNuevo}>
           <Plus size={15} /> Nueva evaluación
         </button>
@@ -7094,50 +7192,117 @@ function EvaluacionesView({ evaluaciones, alumnos, staffNombre, mostrarEntrenado
 
       {lista.length === 0 ? (
         <div className="empty">
-          {filtroAlumno
-            ? "Este alumno todavía no tiene evaluaciones registradas."
+          {filtroAlumno || filtroTipo
+            ? "No hay evaluaciones que coincidan con el filtro."
             : "Todavía no hay evaluaciones registradas. Usa \"Nueva evaluación\" para calificar a un alumno."}
         </div>
       ) : (
-        lista.map((ev) => (
-          <div key={ev.id} className="panel evaluacion-fila">
-            <div className="evaluacion-fila-info">
-              <div className="evento-fila-titulo">
-                {nombreAlumno(ev.alumnoId)}
-                <span className="muted" style={{ fontWeight: 400 }}> · {formatDiaLargo(ev.fecha)}</span>
-              </div>
-              <div className="muted" style={{ fontSize: 13 }}>
-                {ev.categoria || "Sin categoría"}
-                {mostrarEntrenador ? " · " + (staffNombre(ev.entrenadorId) || "—") : ""}
-              </div>
-              <div className="evaluacion-dims">
-                {DIMENSIONES_EVALUACION.map((d) => (
-                  <div key={d.key} className="evaluacion-dim">
-                    <span className="muted" style={{ fontSize: 12 }}>{d.label}</span>
-                    <RatingDots value={ev[d.key]} />
+        lista.map((ev) => {
+          const abierta = abiertaId === ev.id;
+          const resumen = resumenNivelesEvaluacion(ev);
+          return (
+            <div key={ev.id} className="panel evaluacion-card">
+              <div className="evaluacion-fila" onClick={() => setAbiertaId(abierta ? null : ev.id)}>
+                <div className="evaluacion-fila-info">
+                  <div className="evento-fila-titulo">
+                    {nombreAlumno(ev.alumnoId)}
+                    <span className="muted" style={{ fontWeight: 400 }}> · {formatDiaLargo(ev.fecha)}</span>
                   </div>
-                ))}
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    {tipoEvaluacionLabel(ev.tipo)}
+                    {ev.nombreEvento ? " · " + ev.nombreEvento : ""}
+                    {ev.categoria ? " · " + ev.categoria : ""}
+                    {mostrarEntrenador ? " · " + (staffNombre(ev.entrenadorId) || "—") : ""}
+                  </div>
+                  <div className="evaluacion-dims">
+                    {AREAS_EVALUACION.map((a) => (
+                      <NivelDot key={a.key} value={ev.areas[a.key]} />
+                    ))}
+                    <span className="muted" style={{ fontSize: 12 }}>
+                      {resumen.muy_bien} muy bien · {resumen.bien} bien · {resumen.en_proceso} en proceso
+                    </span>
+                  </div>
+                </div>
+                <div className="actions" onClick={(e) => e.stopPropagation()}>
+                  <button className="icon-btn" onClick={() => onImprimir(ev)} aria-label="Ver reporte para imprimir">
+                    <FileDown size={15} />
+                  </button>
+                  <button className="icon-btn" onClick={() => onEditar(ev)} aria-label="Editar">
+                    <Pencil size={15} />
+                  </button>
+                  <button className="icon-btn" onClick={() => onEliminar(ev)} aria-label="Eliminar">
+                    <Trash2 size={15} />
+                  </button>
+                  {abierta ? <ChevronDown size={16} className="muted" /> : <ChevronRight size={16} className="muted" />}
+                </div>
               </div>
-              {ev.comentarios && <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{ev.comentarios}</div>}
+              {abierta && (
+                <div className="evaluacion-detalle">
+                  <div className="evaluacion-detalle-areas">
+                    {AREAS_EVALUACION.map((a) => {
+                      const info = nivelEvaluacionInfo(ev.areas[a.key]);
+                      return (
+                        <div key={a.key} className="evaluacion-detalle-area">
+                          <span className="nivel-pill" style={info ? { background: info.bg, color: info.color } : {}}>
+                            {info ? info.label : "Sin calificar"}
+                          </span>
+                          <span style={{ fontWeight: 600 }}>{a.titulo}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {ev.asistencia && (
+                    <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+                      <strong>Asistencia: </strong>
+                      {ev.asistencia}
+                    </div>
+                  )}
+                  {ev.loMejor.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <div className="form-section-label">Lo mejor de este periodo</div>
+                      <ul className="evaluacion-lista-check">
+                        {ev.loMejor.map((t, i) => (
+                          <li key={i}>{t}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {ev.aTrabajar.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <div className="form-section-label">A trabajar para seguir creciendo</div>
+                      <ul className="evaluacion-lista-check">
+                        {ev.aTrabajar.map((t, i) => (
+                          <li key={i}>
+                            <strong>{t.titulo}: </strong>
+                            {t.descripcion}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {ev.comentario && (
+                    <div style={{ marginTop: 10 }}>
+                      <div className="form-section-label">Comentario del entrenador</div>
+                      <div className="muted" style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>
+                        {ev.comentario}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-            <div className="actions">
-              <button className="icon-btn" onClick={() => onEditar(ev)} aria-label="Editar">
-                <Pencil size={15} />
-              </button>
-              <button className="icon-btn" onClick={() => onEliminar(ev)} aria-label="Eliminar">
-                <Trash2 size={15} />
-              </button>
-            </div>
-          </div>
-        ))
+          );
+        })
       )}
     </div>
   );
 }
 
-// Formulario de evaluación: elige alumno (solo al crear), calificaciones
-// 1-5 en las 4 dimensiones y comentarios libres. La categoría se guarda
-// como snapshot de la del alumno en ese momento.
+// Formulario de evaluación: elige alumno (solo al crear) y periodo (tipo +
+// nombre libre del torneo/periodo), calificación de 3 niveles en las 8
+// áreas fijas, listas de texto libre para "lo mejor" y "a trabajar",
+// asistencia del periodo y comentario del entrenador. La categoría se
+// guarda como snapshot de la del alumno en ese momento.
 function EvaluacionModal({ initial, alumnosDisponibles, onSave, onCancel, enviando }) {
   const esNuevo = !(initial && initial.id);
   const [form, setForm] = useState({
@@ -7145,17 +7310,44 @@ function EvaluacionModal({ initial, alumnosDisponibles, onSave, onCancel, envian
     alumnoId: (initial && initial.alumnoId) || "",
     fecha: (initial && initial.fecha) || todayISO(),
     categoria: (initial && initial.categoria) || "",
-    tecnica: (initial && initial.tecnica) || 3,
-    fisico: (initial && initial.fisico) || 3,
-    tactico: (initial && initial.tactico) || 3,
-    actitud: (initial && initial.actitud) || 3,
-    comentarios: (initial && initial.comentarios) || "",
+    tipo: (initial && initial.tipo) || "trimestral",
+    nombreEvento: (initial && initial.nombreEvento) || "",
+    asistencia: (initial && initial.asistencia) || "",
+    areas: (initial && initial.areas) ? { ...initial.areas } : {},
+    loMejor: ((initial && initial.loMejor) || []).slice(),
+    aTrabajar: ((initial && initial.aTrabajar) || []).map((x) => ({ ...x })),
+    comentario: (initial && initial.comentario) || "",
   });
   const [error, setError] = useState(null);
+  const [loMejorNuevo, setLoMejorNuevo] = useState("");
+  const [aTrabajarTitulo, setATrabajarTitulo] = useState("");
+  const [aTrabajarDescripcion, setATrabajarDescripcion] = useState("");
 
   function elegirAlumno(alumnoId) {
     const al = alumnosDisponibles.find((a) => a.id === alumnoId);
     setForm((prev) => ({ ...prev, alumnoId, categoria: al ? al.categoria || "" : prev.categoria }));
+  }
+
+  function agregarLoMejor() {
+    if (!loMejorNuevo.trim()) return;
+    setForm((prev) => ({ ...prev, loMejor: [...prev.loMejor, loMejorNuevo.trim()] }));
+    setLoMejorNuevo("");
+  }
+  function quitarLoMejor(idx) {
+    setForm((prev) => ({ ...prev, loMejor: prev.loMejor.filter((_, i) => i !== idx) }));
+  }
+
+  function agregarATrabajar() {
+    if (!aTrabajarTitulo.trim()) return;
+    setForm((prev) => ({
+      ...prev,
+      aTrabajar: [...prev.aTrabajar, { titulo: aTrabajarTitulo.trim(), descripcion: aTrabajarDescripcion.trim() }],
+    }));
+    setATrabajarTitulo("");
+    setATrabajarDescripcion("");
+  }
+  function quitarATrabajar(idx) {
+    setForm((prev) => ({ ...prev, aTrabajar: prev.aTrabajar.filter((_, i) => i !== idx) }));
   }
 
   function handleSubmit(e) {
@@ -7173,10 +7365,11 @@ function EvaluacionModal({ initial, alumnosDisponibles, onSave, onCancel, envian
   }
 
   const alumnoActual = alumnosDisponibles.find((a) => a.id === form.alumnoId);
+  const tipoInfo = TIPOS_EVALUACION.find((t) => t.value === form.tipo) || TIPOS_EVALUACION[0];
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h3>{esNuevo ? "Nueva evaluación" : "Editar evaluación"}</h3>
           <button className="icon-btn" onClick={onCancel} aria-label="Cerrar">
@@ -7207,23 +7400,127 @@ function EvaluacionModal({ initial, alumnosDisponibles, onSave, onCancel, envian
             </label>
           </div>
 
-          <div className="form-section-label">Calificación (1 a 5)</div>
-          <div className="stack" style={{ gap: 10 }}>
-            {DIMENSIONES_EVALUACION.map((d) => (
-              <div key={d.key} className="form-row" style={{ alignItems: "center", flexWrap: "nowrap" }}>
-                <div style={{ flex: 1, fontWeight: 600, fontSize: 14 }}>{d.label}</div>
-                <RatingChips value={form[d.key]} onChange={(n) => setForm({ ...form, [d.key]: n })} />
+          <div className="form-row">
+            <label>
+              Tipo de evaluación
+              <select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+                {TIPOS_EVALUACION.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Nombre del periodo / torneo (opcional)
+              <input
+                type="text"
+                value={form.nombreEvento}
+                onChange={(e) => setForm({ ...form, nombreEvento: e.target.value })}
+                placeholder={tipoInfo.placeholderEvento}
+              />
+            </label>
+          </div>
+
+          <label>
+            Asistencia durante el periodo (opcional)
+            <input
+              type="text"
+              value={form.asistencia}
+              onChange={(e) => setForm({ ...form, asistencia: e.target.value })}
+              placeholder="Ej: 16 de 18 entrenamientos, o 4 de 5 partidos"
+            />
+          </label>
+
+          <div className="form-section-label">Calificación por área</div>
+          <div className="stack" style={{ gap: 8 }}>
+            {AREAS_EVALUACION.map((a) => (
+              <div key={a.key} className="panel evaluacion-area-row">
+                <div style={{ flex: 1, minWidth: 180 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{a.titulo}</div>
+                  <div className="muted" style={{ fontSize: 12.5 }}>{a.descripcion}</div>
+                </div>
+                <NivelChips
+                  value={form.areas[a.key]}
+                  onChange={(v) => setForm((prev) => ({ ...prev, areas: { ...prev.areas, [a.key]: v } }))}
+                />
               </div>
             ))}
           </div>
 
+          <div className="form-section-label">Lo mejor de este periodo</div>
+          {form.loMejor.length > 0 && (
+            <div className="stack" style={{ gap: 6 }}>
+              {form.loMejor.map((t, idx) => (
+                <div key={idx} className="panel evaluacion-lista-item">
+                  <span style={{ flex: 1 }}>{t}</span>
+                  <button type="button" className="icon-btn danger" onClick={() => quitarLoMejor(idx)} aria-label="Quitar">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="form-row" style={{ marginTop: 6 }}>
+            <input
+              type="text"
+              value={loMejorNuevo}
+              onChange={(e) => setLoMejorNuevo(e.target.value)}
+              placeholder="Ej: Excelente jugador polivalente…"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  agregarLoMejor();
+                }
+              }}
+            />
+            <button type="button" className="btn-secondary" onClick={agregarLoMejor} disabled={!loMejorNuevo.trim()}>
+              <Plus size={15} /> Agregar punto
+            </button>
+          </div>
+
+          <div className="form-section-label">A trabajar para seguir creciendo</div>
+          {form.aTrabajar.length > 0 && (
+            <div className="stack" style={{ gap: 6 }}>
+              {form.aTrabajar.map((t, idx) => (
+                <div key={idx} className="panel evaluacion-lista-item" style={{ alignItems: "flex-start" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700 }}>{t.titulo}</div>
+                    {t.descripcion && <div className="muted" style={{ fontSize: 13 }}>{t.descripcion}</div>}
+                  </div>
+                  <button type="button" className="icon-btn danger" onClick={() => quitarATrabajar(idx)} aria-label="Quitar">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="form-row" style={{ marginTop: 6 }}>
+            <input
+              type="text"
+              value={aTrabajarTitulo}
+              onChange={(e) => setATrabajarTitulo(e.target.value)}
+              placeholder="Título (ej: Pase)"
+            />
+            <input
+              type="text"
+              value={aTrabajarDescripcion}
+              onChange={(e) => setATrabajarDescripcion(e.target.value)}
+              placeholder="Descripción (opcional)"
+              style={{ flex: 2 }}
+            />
+            <button type="button" className="btn-secondary" onClick={agregarATrabajar} disabled={!aTrabajarTitulo.trim()}>
+              <Plus size={15} /> Agregar punto
+            </button>
+          </div>
+
           <label>
-            Comentarios (opcional)
+            Comentario del entrenador (opcional)
             <textarea
-              rows={3}
-              value={form.comentarios}
-              onChange={(e) => setForm({ ...form, comentarios: e.target.value })}
-              placeholder="Observaciones sobre el desempeño del alumno…"
+              rows={4}
+              value={form.comentario}
+              onChange={(e) => setForm({ ...form, comentario: e.target.value })}
+              placeholder="Observaciones generales para los papás…"
             />
           </label>
         </div>
@@ -7234,6 +7531,147 @@ function EvaluacionModal({ initial, alumnosDisponibles, onSave, onCancel, envian
           <button className="btn-primary" onClick={handleSubmit} disabled={enviando}>
             {enviando ? "Guardando…" : "Guardar"}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Reporte imprimible de una evaluación, con el mismo estilo que la
+// infografía en papel que ya usa la academia (logo, franja azul, semáforo
+// de 3 niveles, tabla de áreas y cajas de fortalezas/a trabajar/comentario).
+// El botón "Descargar / imprimir" usa la impresión del navegador
+// (window.print), que en "Guardar como PDF" genera el archivo — así no
+// hace falta agregar una librería de PDF solo para esto. El CSS de
+// impresión (@media print, en Styles) oculta todo lo demás de la pantalla
+// y deja solo el contenido de #reporte-evaluacion.
+function ReporteEvaluacionModal({ evaluacion, alumno, entrenadorNombre, onCancel }) {
+  return (
+    <div className="modal-overlay reporte-overlay" onClick={onCancel}>
+      <div className="reporte-shell" onClick={(e) => e.stopPropagation()}>
+        <div className="reporte-toolbar no-print">
+          <button className="icon-btn" onClick={onCancel} aria-label="Cerrar">
+            <X size={18} />
+          </button>
+          <button className="btn-primary" onClick={() => window.print()}>
+            <FileDown size={15} /> Descargar / imprimir
+          </button>
+        </div>
+        <div id="reporte-evaluacion" className="reporte-pagina">
+          <div className="reporte-header">
+            <LogoMark size={58} />
+            <div className="reporte-header-titulo">
+              <div className="reporte-titulo-principal">Evaluación individual</div>
+              {evaluacion.nombreEvento && <div className="reporte-titulo-secundario">{evaluacion.nombreEvento}</div>}
+              <div className="reporte-titulo-categoria">
+                {tipoEvaluacionLabel(evaluacion.tipo)}
+                {evaluacion.categoria ? " · Categoría " + evaluacion.categoria : ""}
+              </div>
+            </div>
+          </div>
+
+          <div className="reporte-infobar">
+            <div>
+              <div className="muted" style={{ fontSize: 11.5 }}>Jugador</div>
+              <div style={{ fontWeight: 700 }}>{alumno ? alumno.nombre : "—"}</div>
+            </div>
+            <div>
+              <div className="muted" style={{ fontSize: 11.5 }}>Fecha</div>
+              <div style={{ fontWeight: 700 }}>{formatDiaLargo(evaluacion.fecha)}</div>
+            </div>
+            <div>
+              <div className="muted" style={{ fontSize: 11.5 }}>Entrenador</div>
+              <div style={{ fontWeight: 700 }}>{entrenadorNombre || "—"}</div>
+            </div>
+          </div>
+
+          <div className="reporte-leyenda">
+            {NIVELES_EVALUACION.map((n) => (
+              <div key={n.value} className="reporte-leyenda-item">
+                <span className="reporte-leyenda-dot" style={{ background: n.color }} />
+                <div>
+                  <div style={{ fontWeight: 700, color: n.color, fontSize: 13 }}>{n.label}</div>
+                  <div className="muted" style={{ fontSize: 11.5 }}>{n.descripcion}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <table className="reporte-tabla">
+            <thead>
+              <tr>
+                <th>Área a evaluar</th>
+                <th>Nivel</th>
+              </tr>
+            </thead>
+            <tbody>
+              {AREAS_EVALUACION.map((a) => {
+                const valor = evaluacion.areas[a.key];
+                return (
+                  <tr key={a.key}>
+                    <td>
+                      <div style={{ fontWeight: 700 }}>{a.titulo}</div>
+                      <div className="muted" style={{ fontSize: 12 }}>{a.descripcion}</div>
+                    </td>
+                    <td>
+                      <div className="reporte-tabla-niveles">
+                        {NIVELES_EVALUACION.map((n) => (
+                          <span
+                            key={n.value}
+                            className="reporte-tabla-dot"
+                            style={valor === n.value ? { background: n.color, borderColor: n.color } : {}}
+                          />
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          {(evaluacion.loMejor.length > 0 || evaluacion.aTrabajar.length > 0 || evaluacion.comentario) && (
+            <div className="reporte-cajas">
+              {evaluacion.loMejor.length > 0 && (
+                <div className="reporte-caja reporte-caja-verde">
+                  <div className="reporte-caja-titulo">Lo mejor de este periodo</div>
+                  <ul>
+                    {evaluacion.loMejor.map((t, i) => (
+                      <li key={i}>{t}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {evaluacion.aTrabajar.length > 0 && (
+                <div className="reporte-caja reporte-caja-naranja">
+                  <div className="reporte-caja-titulo">A trabajar para seguir creciendo</div>
+                  <ul>
+                    {evaluacion.aTrabajar.map((t, i) => (
+                      <li key={i}>
+                        <strong>{t.titulo}: </strong>
+                        {t.descripcion}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {evaluacion.comentario && (
+                <div className="reporte-caja reporte-caja-azul">
+                  <div className="reporte-caja-titulo">Comentario del entrenador</div>
+                  <p style={{ whiteSpace: "pre-wrap" }}>{evaluacion.comentario}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {evaluacion.asistencia && (
+            <div className="reporte-asistencia">
+              <strong>Asistencia del periodo: </strong>
+              {evaluacion.asistencia}
+            </div>
+          )}
+
+          <div className="reporte-footer">Atletic Guatemala · #SomosAtletic</div>
         </div>
       </div>
     </div>
@@ -9537,17 +9975,60 @@ function Styles() {
       .tarjeta-roja { background: #FBEAE9; color: #C13F3B; }
 
       /* Evaluaciones deportivas */
-      .evaluacion-fila { display: flex; align-items: flex-start; gap: 14px; padding: 12px 14px; }
+      .modal.wide { max-width: 640px; }
+      .evaluacion-card { padding: 0; overflow: hidden; }
+      .evaluacion-fila { display: flex; align-items: flex-start; gap: 14px; padding: 12px 14px; cursor: pointer; }
       .evaluacion-fila-info { flex: 1; min-width: 0; }
-      .evaluacion-dims { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; }
-      .evaluacion-dim { display: flex; flex-direction: column; gap: 3px; }
-      .rating-chips { display: flex; gap: 5px; }
-      .rating-chip { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border-soft); background: #fff; font-weight: 700; font-size: 13px; cursor: pointer; color: #8A8D90; transition: background 0.12s, color 0.12s, border-color 0.12s; }
-      .rating-chip:hover { background: #F4F6F7; }
-      .rating-chip.active { background: var(--blue); border-color: var(--blue); color: #fff; }
-      .rating-dots { display: inline-flex; gap: 2px; }
-      .rating-dot { width: 8px; height: 8px; border-radius: 50%; background: #E3E6E8; }
-      .rating-dot.filled { background: var(--blue); }
+      .evaluacion-dims { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+      .nivel-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+      .nivel-chip { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border-soft); background: #fff; font-weight: 600; font-size: 12.5px; cursor: pointer; color: #6C6F72; transition: background 0.12s, color 0.12s, border-color 0.12s; }
+      .nivel-chip:hover { background: #F4F6F7; }
+      .nivel-dot { width: 10px; height: 10px; border-radius: 50%; background: #E3E6E8; display: inline-block; flex-shrink: 0; }
+      .nivel-pill { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; background: #F1EFEA; color: #6A6D70; flex-shrink: 0; }
+      .evaluacion-area-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; flex-wrap: wrap; }
+      .evaluacion-lista-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; }
+      .evaluacion-lista-check { margin: 4px 0 0; padding-left: 18px; font-size: 13.5px; color: var(--charcoal); display: flex; flex-direction: column; gap: 4px; }
+      .evaluacion-detalle { border-top: 1px solid var(--border-soft); padding: 14px; background: #FAFBFB; }
+      .evaluacion-detalle-areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+      .evaluacion-detalle-area { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+
+      /* Reporte imprimible de evaluación (estilo infografía) */
+      .modal-overlay.reporte-overlay { align-items: flex-start; padding: 24px 12px; overflow-y: auto; }
+      .reporte-shell { background: transparent; width: 100%; max-width: 700px; margin: 0 auto; }
+      .reporte-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+      .reporte-pagina { background: #fff; border-radius: var(--radius-lg); padding: 26px; box-shadow: var(--shadow-modal); }
+      .reporte-header { display: flex; align-items: center; gap: 16px; border-bottom: 3px solid var(--blue); padding-bottom: 16px; margin-bottom: 16px; }
+      .reporte-titulo-principal { font-family: 'Jost', sans-serif; font-weight: 700; font-size: 22px; color: var(--charcoal); text-transform: uppercase; letter-spacing: 0.3px; }
+      .reporte-titulo-secundario { font-family: 'Jost', sans-serif; font-weight: 700; font-size: 17px; color: var(--blue); text-transform: uppercase; }
+      .reporte-titulo-categoria { font-size: 13px; color: #6C6F72; margin-top: 2px; }
+      .reporte-infobar { display: flex; gap: 22px; flex-wrap: wrap; background: #F4F6F7; border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; }
+      .reporte-leyenda { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 16px; }
+      .reporte-leyenda-item { display: flex; align-items: flex-start; gap: 8px; max-width: 220px; }
+      .reporte-leyenda-dot { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; margin-top: 2px; }
+      .reporte-tabla { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+      .reporte-tabla th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; color: #8A8D90; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); }
+      .reporte-tabla td { padding: 8px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+      .reporte-tabla-niveles { display: flex; gap: 6px; }
+      .reporte-tabla-dot { width: 15px; height: 15px; border-radius: 50%; border: 2px solid var(--border-soft); background: #fff; display: inline-block; }
+      .reporte-cajas { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 14px; }
+      .reporte-caja { border-radius: 10px; padding: 12px 14px; font-size: 12.5px; }
+      .reporte-caja ul { margin: 6px 0 0; padding-left: 16px; display: flex; flex-direction: column; gap: 5px; }
+      .reporte-caja p { margin: 6px 0 0; white-space: pre-wrap; }
+      .reporte-caja-titulo { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.2px; }
+      .reporte-caja-verde { background: #E7F7F1; color: #14523B; }
+      .reporte-caja-verde .reporte-caja-titulo { color: #158F63; }
+      .reporte-caja-naranja { background: #FCF1DD; color: #6B4B0A; }
+      .reporte-caja-naranja .reporte-caja-titulo { color: #B4790A; }
+      .reporte-caja-azul { background: #E7F7FD; color: #0A4E63; }
+      .reporte-caja-azul .reporte-caja-titulo { color: #0090C2; }
+      .reporte-asistencia { font-size: 13px; color: var(--charcoal); margin-bottom: 10px; }
+      .reporte-footer { text-align: center; font-size: 11px; color: #8A8D90; letter-spacing: 0.3px; text-transform: uppercase; border-top: 1px solid var(--border-soft); padding-top: 10px; }
+      @media print {
+        body * { visibility: hidden; }
+        #reporte-evaluacion, #reporte-evaluacion * { visibility: visible; }
+        #reporte-evaluacion { position: absolute; top: 0; left: 0; width: 100%; box-shadow: none; border-radius: 0; padding: 10px; }
+        .no-print { display: none !important; }
+      }
 
       /* Cartera / recordatorios de pago */
       .cartera-fila { display: flex; align-items: center; gap: 14px; padding: 12px 14px; flex-wrap: wrap; }
