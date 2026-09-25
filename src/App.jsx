@@ -544,6 +544,41 @@ function inventarioToDb(i) {
   };
 }
 
+// ---------- Evaluaciones deportivas ----------
+// Cada evaluación califica a un alumno en 4 dimensiones (1 a 5): técnica,
+// físico, táctico y actitud. "categoria" se guarda como snapshot (la
+// categoría del alumno al momento de evaluar) para que el historial no
+// cambie si el alumno luego sube de categoría.
+function evaluacionFromDb(r) {
+  return {
+    id: r.id,
+    alumnoId: r.alumno_id,
+    entrenadorId: r.entrenador_id,
+    fecha: r.fecha,
+    categoria: r.categoria,
+    tecnica: Number(r.tecnica) || 0,
+    fisico: Number(r.fisico) || 0,
+    tactico: Number(r.tactico) || 0,
+    actitud: Number(r.actitud) || 0,
+    comentarios: r.comentarios,
+  };
+}
+function evaluacionToDb(e) {
+  return {
+    alumno_id: e.alumnoId,
+    fecha: e.fecha || todayISO(),
+    categoria: e.categoria || null,
+    tecnica: Number(e.tecnica) || 3,
+    fisico: Number(e.fisico) || 3,
+    tactico: Number(e.tactico) || 3,
+    actitud: Number(e.actitud) || 3,
+    comentarios: e.comentarios || null,
+  };
+}
+function promedioEvaluacion(e) {
+  return (Number(e.tecnica) + Number(e.fisico) + Number(e.tactico) + Number(e.actitud)) / 4;
+}
+
 // Genera las fechas de las repeticiones de un evento (incluida la
 // primera), desde "fecha" hasta "hasta" (incluida), según "frecuencia".
 // Tope de 52 fechas como protección — nadie necesita repetir un evento
@@ -914,6 +949,14 @@ const CATEGORIAS_INVENTARIO = [
 // sin sede se entiende como de uso general/compartido entre sedes.
 const SEDES = ["Hacienda Real", "Colegio Discovery"];
 
+// Dimensiones que califica cada evaluación deportiva, de 1 (bajo) a 5 (alto).
+const DIMENSIONES_EVALUACION = [
+  { key: "tecnica", label: "Técnica" },
+  { key: "fisico", label: "Físico" },
+  { key: "tactico", label: "Táctico" },
+  { key: "actitud", label: "Actitud" },
+];
+
 // Motivos de ausencia: opciones fijas que pidió el dueño, en este orden
 // exacto ("Otro" se agregó como comodín para casos que no encajen en las
 // otras cuatro).
@@ -1172,6 +1215,9 @@ function PanelEntrenador({ perfil, onLogout }) {
   const [confirmDeleteSesion, setConfirmDeleteSesion] = useState(null);
   const [resultadoModal, setResultadoModal] = useState(null); // { evento, resultado } | null
   const [confirmDeleteResultado, setConfirmDeleteResultado] = useState(null);
+  const [evaluaciones, setEvaluaciones] = useState([]);
+  const [evaluacionModal, setEvaluacionModal] = useState(null); // null | {} (nueva) | evaluación (editar)
+  const [confirmDeleteEvaluacion, setConfirmDeleteEvaluacion] = useState(null);
 
   const enviandoRef = React.useRef(false);
   const [enviando, setEnviando] = useState(false);
@@ -1192,7 +1238,7 @@ function PanelEntrenador({ perfil, onLogout }) {
   }
 
   async function cargar() {
-    const [a, s, ev, ej, se, sej, rp, pg, pt] = await Promise.all([
+    const [a, s, ev, ej, se, sej, rp, pg, pt, eva] = await Promise.all([
       supabase.rpc("alumnos_para_asistencia"),
       supabase.from("asistencias").select("*").order("fecha", { ascending: false }),
       supabase.rpc("eventos_para_entrenador"),
@@ -1202,6 +1248,7 @@ function PanelEntrenador({ perfil, onLogout }) {
       supabase.from("resultados_partido").select("*"),
       supabase.from("partido_goles").select("*"),
       supabase.from("partido_tarjetas").select("*"),
+      supabase.from("evaluaciones").select("*").order("fecha", { ascending: false }),
     ]);
     setAlumnos(a.data || []);
     setAsistencias((s.data || []).map(asistenciaFromDb));
@@ -1209,6 +1256,7 @@ function PanelEntrenador({ perfil, onLogout }) {
     setEjercicios((ej.data || []).map(ejercicioFromDb));
     setSesiones(juntarSesionesConEjercicios(se.data || [], sej.data || []));
     setResultados(juntarResultadosConDetalle(rp.data || [], pg.data || [], pt.data || []));
+    setEvaluaciones((eva.data || []).map(evaluacionFromDb));
   }
 
   // Guarda un ejercicio de la biblioteca: si trae id, lo actualiza; si no,
@@ -1398,6 +1446,44 @@ function PanelEntrenador({ perfil, onLogout }) {
     }
   }
 
+  // Guarda una evaluación deportiva a nombre de este entrenador
+  // (entrenador_id = perfil.id, obligatorio por la RLS de la tabla).
+  async function guardarEvaluacion(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = evaluacionToDb(data);
+      const { error } = esNuevo
+        ? await supabase.from("evaluaciones").insert([{ ...payload, entrenador_id: perfil.id }])
+        : await supabase.from("evaluaciones").update(payload).eq("id", data.id);
+      if (error) {
+        showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+        return;
+      }
+      await cargar();
+      setEvaluacionModal(null);
+      showToast(esNuevo ? "Evaluación registrada." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarEvaluacion(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("evaluaciones").delete().eq("id", id);
+      setConfirmDeleteEvaluacion(null);
+      if (!error) {
+        setEvaluaciones((prev) => prev.filter((e) => e.id !== id));
+        showToast("Evaluación eliminada.");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -1413,6 +1499,7 @@ function PanelEntrenador({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "resultados_partido" }, () => cargar())
       .on("postgres_changes", { event: "*", schema: "public", table: "partido_goles" }, () => cargar())
       .on("postgres_changes", { event: "*", schema: "public", table: "partido_tarjetas" }, () => cargar())
+      .on("postgres_changes", { event: "*", schema: "public", table: "evaluaciones" }, () => cargar())
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -1490,6 +1577,7 @@ function PanelEntrenador({ perfil, onLogout }) {
           { key: "sesiones", label: "Sesiones" },
           { key: "biblioteca", label: "Biblioteca" },
           { key: "resultados", label: "Partidos" },
+          { key: "evaluaciones", label: "Evaluaciones" },
         ].map((t) => (
           <button
             key={t.key}
@@ -1543,6 +1631,16 @@ function PanelEntrenador({ perfil, onLogout }) {
                 onRegistrar={(evento) => setResultadoModal({ evento, resultado: null })}
                 onEditar={(evento, resultado) => setResultadoModal({ evento, resultado })}
                 onEliminar={(r) => setConfirmDeleteResultado(r)}
+              />
+            )}
+            {tab === "evaluaciones" && (
+              <EvaluacionesView
+                evaluaciones={evaluaciones}
+                alumnos={alumnos}
+                mostrarEntrenador={false}
+                onNuevo={() => setEvaluacionModal({})}
+                onEditar={(ev) => setEvaluacionModal(ev)}
+                onEliminar={(ev) => setConfirmDeleteEvaluacion(ev)}
               />
             )}
           </>
@@ -1612,6 +1710,27 @@ function PanelEntrenador({ perfil, onLogout }) {
           danger
           onConfirm={() => eliminarResultado(confirmDeleteResultado.id)}
           onCancel={() => setConfirmDeleteResultado(null)}
+          disabled={enviando}
+        />
+      )}
+
+      {evaluacionModal !== null && (
+        <EvaluacionModal
+          initial={evaluacionModal}
+          alumnosDisponibles={alumnos}
+          onSave={guardarEvaluacion}
+          onCancel={() => setEvaluacionModal(null)}
+          enviando={enviando}
+        />
+      )}
+      {confirmDeleteEvaluacion && (
+        <ConfirmDialog
+          title="¿Eliminar esta evaluación?"
+          body="No podrá deshacerse."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarEvaluacion(confirmDeleteEvaluacion.id)}
+          onCancel={() => setConfirmDeleteEvaluacion(null)}
           disabled={enviando}
         />
       )}
@@ -1856,6 +1975,7 @@ const GRUPOS_NAV_ADMIN = [
       { key: "sesiones", label: "Sesiones" },
       { key: "biblioteca", label: "Biblioteca" },
       { key: "resultados", label: "Partidos" },
+      { key: "evaluaciones", label: "Evaluaciones" },
     ],
   },
   { key: "staff", label: "Staff", tabs: [{ key: "staff", label: "Staff" }] },
@@ -2691,6 +2811,9 @@ function PanelAdmin({ perfil, onLogout }) {
   const [inventario, setInventario] = useState([]);
   const [inventarioModal, setInventarioModal] = useState(null); // null | {} (nuevo) | artículo (editar)
   const [confirmDeleteInventario, setConfirmDeleteInventario] = useState(null);
+  const [evaluaciones, setEvaluaciones] = useState([]);
+  const [evaluacionModal, setEvaluacionModal] = useState(null); // null | {} (nueva) | evaluación (editar)
+  const [confirmDeleteEvaluacion, setConfirmDeleteEvaluacion] = useState(null);
 
   // Cambia de tab abriendo también el grupo de la barra lateral al que
   // pertenece — para los accesos directos (ej. botones del Resumen) que no
@@ -2748,7 +2871,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [reloading, setReloading] = useState(false);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv] = await Promise.all([
+    const [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv, eva] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("cargos").select("*").order("created_at", { ascending: false }),
@@ -2767,6 +2890,7 @@ function PanelAdmin({ perfil, onLogout }) {
       supabase.from("campeonatos").select("*").order("fecha", { ascending: false }),
       supabase.from("campeonato_inscripciones").select("*"),
       supabase.from("inventario").select("*").order("nombre"),
+      supabase.from("evaluaciones").select("*").order("fecha", { ascending: false }),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -2782,8 +2906,9 @@ function PanelAdmin({ perfil, onLogout }) {
     setResultados(juntarResultadosConDetalle(rp.data || [], pg.data || [], pt.data || []));
     setCampeonatos(juntarCampeonatosConInscripciones(cp.data || [], ci.data || []));
     setInventario((inv.data || []).map(inventarioFromDb));
+    setEvaluaciones((eva.data || []).map(evaluacionFromDb));
 
-    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv].some((r) => r.error);
+    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv, eva].some((r) => r.error);
     if (algunFallo) {
       showToast(
         "No se pudo cargar toda tu información (revisa tu conexión). Dale a \"Recargar\" para intentar de nuevo.",
@@ -2818,6 +2943,7 @@ function PanelAdmin({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "campeonatos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "campeonato_inscripciones" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "inventario" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "evaluaciones" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -3292,6 +3418,46 @@ function PanelAdmin({ perfil, onLogout }) {
       if (!error) {
         setResultados((prev) => prev.filter((r) => r.id !== id));
         showToast("Resultado eliminado.");
+      } else {
+        showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  // Guarda una evaluación deportiva a nombre de este admin (entrenador_id =
+  // perfil.id, igual que en resultados de partidos, para llevar registro de
+  // quién la hizo). Al editar una ya existente de otro entrenador, se
+  // conserva su entrenador_id original (no se toca en el payload).
+  async function guardarEvaluacion(data) {
+    if (!iniciarEnvio()) return;
+    try {
+      const esNuevo = !data.id;
+      const payload = evaluacionToDb(data);
+      const { error } = esNuevo
+        ? await supabase.from("evaluaciones").insert([{ ...payload, entrenador_id: perfil.id }])
+        : await supabase.from("evaluaciones").update(payload).eq("id", data.id);
+      if (error) {
+        showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
+        return;
+      }
+      await cargarDatos({ silent: true });
+      setEvaluacionModal(null);
+      showToast(esNuevo ? "Evaluación registrada." : "Cambios guardados.");
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  async function eliminarEvaluacion(id) {
+    if (!iniciarEnvio()) return;
+    try {
+      const { error } = await supabase.from("evaluaciones").delete().eq("id", id);
+      setConfirmDeleteEvaluacion(null);
+      if (!error) {
+        setEvaluaciones((prev) => prev.filter((e) => e.id !== id));
+        showToast("Evaluación eliminada.");
       } else {
         showToast("No se pudo eliminar (revisa tu conexión). Inténtalo de nuevo.", true);
       }
@@ -4062,6 +4228,18 @@ function PanelAdmin({ perfil, onLogout }) {
               />
             )}
 
+            {tab === "evaluaciones" && (
+              <EvaluacionesView
+                evaluaciones={evaluaciones}
+                alumnos={alumnos}
+                staffNombre={(id) => (staff.find((p) => p.id === id) || {}).nombre}
+                mostrarEntrenador
+                onNuevo={() => setEvaluacionModal({})}
+                onEditar={(ev) => setEvaluacionModal(ev)}
+                onEliminar={(ev) => setConfirmDeleteEvaluacion(ev)}
+              />
+            )}
+
             {tab === "campeonatos" && (
               <CampeonatosView
                 campeonatos={campeonatos}
@@ -4194,6 +4372,27 @@ function PanelAdmin({ perfil, onLogout }) {
           danger
           onConfirm={() => eliminarInventario(confirmDeleteInventario.id)}
           onCancel={() => setConfirmDeleteInventario(null)}
+          disabled={enviando}
+        />
+      )}
+
+      {evaluacionModal !== null && (
+        <EvaluacionModal
+          initial={evaluacionModal}
+          alumnosDisponibles={alumnos.filter((a) => a.activo)}
+          onSave={guardarEvaluacion}
+          onCancel={() => setEvaluacionModal(null)}
+          enviando={enviando}
+        />
+      )}
+      {confirmDeleteEvaluacion && (
+        <ConfirmDialog
+          title="¿Eliminar esta evaluación?"
+          body="No podrá deshacerse."
+          confirmLabel="Eliminar"
+          danger
+          onConfirm={() => eliminarEvaluacion(confirmDeleteEvaluacion.id)}
+          onCancel={() => setConfirmDeleteEvaluacion(null)}
           disabled={enviando}
         />
       )}
@@ -6822,6 +7021,225 @@ function InventarioModal({ initial, onSave, onCancel, enviando }) {
   );
 }
 
+// Selector de calificación 1 a 5 (chips numerados en vez de un <select>,
+// para calificar rápido desde el celular en la cancha).
+function RatingChips({ value, onChange }) {
+  return (
+    <div className="rating-chips">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          type="button"
+          key={n}
+          className={"rating-chip" + (n <= value ? " active" : "")}
+          onClick={() => onChange(n)}
+          aria-label={`Calificar ${n} de 5`}
+        >
+          {n}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Puntitos de solo lectura para mostrar una calificación en una lista sin
+// ocupar tanto espacio como los RatingChips (que son para el formulario).
+function RatingDots({ value }) {
+  return (
+    <span className="rating-dots" aria-label={`${value} de 5`}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <span key={n} className={"rating-dot" + (n <= value ? " filled" : "")} />
+      ))}
+    </span>
+  );
+}
+
+// Lista de evaluaciones deportivas (una por alumno por fecha). Se puede
+// filtrar por alumno. "mostrarEntrenador" (vista admin) agrega quién la
+// registró; el entrenador solo ve y administra las suyas (ya limitado por
+// las políticas de la base de datos).
+function EvaluacionesView({ evaluaciones, alumnos, staffNombre, mostrarEntrenador, onNuevo, onEditar, onEliminar }) {
+  const [filtroAlumno, setFiltroAlumno] = useState("");
+
+  const alumnosConEvaluacion = useMemo(() => {
+    const ids = new Set(evaluaciones.map((e) => e.alumnoId));
+    return alumnos.filter((a) => ids.has(a.id)).sort((x, y) => x.nombre.localeCompare(y.nombre));
+  }, [evaluaciones, alumnos]);
+
+  const lista = useMemo(() => {
+    return evaluaciones
+      .filter((e) => (filtroAlumno ? e.alumnoId === filtroAlumno : true))
+      .sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  }, [evaluaciones, filtroAlumno]);
+
+  function nombreAlumno(id) {
+    const a = alumnos.find((x) => x.id === id);
+    return a ? a.nombre : "Alumno ya no disponible";
+  }
+
+  return (
+    <div className="stack">
+      <div className="toolbar">
+        <select value={filtroAlumno} onChange={(e) => setFiltroAlumno(e.target.value)}>
+          <option value="">Todos los alumnos</option>
+          {alumnosConEvaluacion.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.nombre}
+            </option>
+          ))}
+        </select>
+        <button className="btn-primary" onClick={onNuevo}>
+          <Plus size={15} /> Nueva evaluación
+        </button>
+      </div>
+
+      {lista.length === 0 ? (
+        <div className="empty">
+          {filtroAlumno
+            ? "Este alumno todavía no tiene evaluaciones registradas."
+            : "Todavía no hay evaluaciones registradas. Usa \"Nueva evaluación\" para calificar a un alumno."}
+        </div>
+      ) : (
+        lista.map((ev) => (
+          <div key={ev.id} className="panel evaluacion-fila">
+            <div className="evaluacion-fila-info">
+              <div className="evento-fila-titulo">
+                {nombreAlumno(ev.alumnoId)}
+                <span className="muted" style={{ fontWeight: 400 }}> · {formatDiaLargo(ev.fecha)}</span>
+              </div>
+              <div className="muted" style={{ fontSize: 13 }}>
+                {ev.categoria || "Sin categoría"}
+                {mostrarEntrenador ? " · " + (staffNombre(ev.entrenadorId) || "—") : ""}
+              </div>
+              <div className="evaluacion-dims">
+                {DIMENSIONES_EVALUACION.map((d) => (
+                  <div key={d.key} className="evaluacion-dim">
+                    <span className="muted" style={{ fontSize: 12 }}>{d.label}</span>
+                    <RatingDots value={ev[d.key]} />
+                  </div>
+                ))}
+              </div>
+              {ev.comentarios && <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{ev.comentarios}</div>}
+            </div>
+            <div className="actions">
+              <button className="icon-btn" onClick={() => onEditar(ev)} aria-label="Editar">
+                <Pencil size={15} />
+              </button>
+              <button className="icon-btn" onClick={() => onEliminar(ev)} aria-label="Eliminar">
+                <Trash2 size={15} />
+              </button>
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// Formulario de evaluación: elige alumno (solo al crear), calificaciones
+// 1-5 en las 4 dimensiones y comentarios libres. La categoría se guarda
+// como snapshot de la del alumno en ese momento.
+function EvaluacionModal({ initial, alumnosDisponibles, onSave, onCancel, enviando }) {
+  const esNuevo = !(initial && initial.id);
+  const [form, setForm] = useState({
+    id: (initial && initial.id) || null,
+    alumnoId: (initial && initial.alumnoId) || "",
+    fecha: (initial && initial.fecha) || todayISO(),
+    categoria: (initial && initial.categoria) || "",
+    tecnica: (initial && initial.tecnica) || 3,
+    fisico: (initial && initial.fisico) || 3,
+    tactico: (initial && initial.tactico) || 3,
+    actitud: (initial && initial.actitud) || 3,
+    comentarios: (initial && initial.comentarios) || "",
+  });
+  const [error, setError] = useState(null);
+
+  function elegirAlumno(alumnoId) {
+    const al = alumnosDisponibles.find((a) => a.id === alumnoId);
+    setForm((prev) => ({ ...prev, alumnoId, categoria: al ? al.categoria || "" : prev.categoria }));
+  }
+
+  function handleSubmit(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!form.alumnoId) {
+      setError("Elige a qué alumno vas a evaluar.");
+      return;
+    }
+    if (!form.fecha) {
+      setError("Elige la fecha de la evaluación.");
+      return;
+    }
+    setError(null);
+    onSave(form);
+  }
+
+  const alumnoActual = alumnosDisponibles.find((a) => a.id === form.alumnoId);
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{esNuevo ? "Nueva evaluación" : "Editar evaluación"}</h3>
+          <button className="icon-btn" onClick={onCancel} aria-label="Cerrar">
+            <X size={18} />
+          </button>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="form">
+          <div className="form-row">
+            <label>
+              Alumno
+              {esNuevo ? (
+                <select value={form.alumnoId} onChange={(e) => elegirAlumno(e.target.value)} autoFocus>
+                  <option value="">Elige un alumno…</option>
+                  {alumnosDisponibles.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.nombre}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input type="text" value={(alumnoActual && alumnoActual.nombre) || "Alumno"} disabled />
+              )}
+            </label>
+            <label>
+              Fecha
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
+            </label>
+          </div>
+
+          <div className="form-section-label">Calificación (1 a 5)</div>
+          <div className="stack" style={{ gap: 10 }}>
+            {DIMENSIONES_EVALUACION.map((d) => (
+              <div key={d.key} className="form-row" style={{ alignItems: "center", flexWrap: "nowrap" }}>
+                <div style={{ flex: 1, fontWeight: 600, fontSize: 14 }}>{d.label}</div>
+                <RatingChips value={form[d.key]} onChange={(n) => setForm({ ...form, [d.key]: n })} />
+              </div>
+            ))}
+          </div>
+
+          <label>
+            Comentarios (opcional)
+            <textarea
+              rows={3}
+              value={form.comentarios}
+              onChange={(e) => setForm({ ...form, comentarios: e.target.value })}
+              placeholder="Observaciones sobre el desempeño del alumno…"
+            />
+          </label>
+        </div>
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onCancel} disabled={enviando}>
+            Cancelar
+          </button>
+          <button className="btn-primary" onClick={handleSubmit} disabled={enviando}>
+            {enviando ? "Guardando…" : "Guardar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Calendario operativo: grilla de mes estilo Google Calendar. Cada celda
 // muestra los eventos de ese día (como pastillas de color según el tipo);
 // al hacer clic en un día se selecciona y se abre el panel de abajo con el
@@ -9117,6 +9535,19 @@ function Styles() {
       .tarjeta-pill { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; padding: 2px 8px; border-radius: 999px; flex-shrink: 0; }
       .tarjeta-amarilla { background: #FCF1DD; color: #B4790A; }
       .tarjeta-roja { background: #FBEAE9; color: #C13F3B; }
+
+      /* Evaluaciones deportivas */
+      .evaluacion-fila { display: flex; align-items: flex-start; gap: 14px; padding: 12px 14px; }
+      .evaluacion-fila-info { flex: 1; min-width: 0; }
+      .evaluacion-dims { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; }
+      .evaluacion-dim { display: flex; flex-direction: column; gap: 3px; }
+      .rating-chips { display: flex; gap: 5px; }
+      .rating-chip { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border-soft); background: #fff; font-weight: 700; font-size: 13px; cursor: pointer; color: #8A8D90; transition: background 0.12s, color 0.12s, border-color 0.12s; }
+      .rating-chip:hover { background: #F4F6F7; }
+      .rating-chip.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+      .rating-dots { display: inline-flex; gap: 2px; }
+      .rating-dot { width: 8px; height: 8px; border-radius: 50%; background: #E3E6E8; }
+      .rating-dot.filled { background: var(--blue); }
 
       /* Cartera / recordatorios de pago */
       .cartera-fila { display: flex; align-items: center; gap: 14px; padding: 12px 14px; flex-wrap: wrap; }
