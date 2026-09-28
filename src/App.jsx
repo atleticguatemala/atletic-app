@@ -1058,6 +1058,54 @@ function csvEscape(v) {
   return s;
 }
 
+// Arma y dispara la descarga de un .csv a partir de filas (arreglos de
+// celdas) — mismo mecanismo que ya usaba "Exportar resumen del mes", ahora
+// compartido por todas las pestañas del Centro de reportes.
+function descargarCsv(nombreArchivo, filas) {
+  const csv = filas.map((fila) => fila.map(csvEscape).join(",")).join("\r\n");
+  // El "﻿" (BOM) al inicio es lo que hace que Excel reconozca los
+  // acentos y la "ñ" correctamente al abrir el archivo directo.
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = nombreArchivo;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+// Rango de fechas por defecto del Centro de reportes: los últimos 6 meses
+// completos hasta hoy (mismo horizonte que ya usa el gráfico del Resumen).
+function rangoReporteDefault() {
+  const hoy = new Date();
+  const desde = new Date(hoy.getFullYear(), hoy.getMonth() - 5, 1);
+  return { desde: desde.toISOString().slice(0, 10), hasta: todayISO() };
+}
+function enRangoFecha(fechaISO, desde, hasta) {
+  if (!fechaISO) return false;
+  return fechaISO >= desde && fechaISO <= hasta;
+}
+// Lista de "YYYY-MM" entre dos fechas (inclusive), para armar series
+// mensuales aunque algún mes no tenga movimientos.
+function mesesEnRango(desde, hasta) {
+  const meses = [];
+  const [y0, m0] = desde.slice(0, 7).split("-").map(Number);
+  const [y1, m1] = hasta.slice(0, 7).split("-").map(Number);
+  let y = y0,
+    m = m0;
+  while (y < y1 || (y === y1 && m <= m1)) {
+    meses.push(`${y}-${String(m).padStart(2, "0")}`);
+    m++;
+    if (m > 12) {
+      m = 1;
+      y++;
+    }
+  }
+  return meses;
+}
+
 function saldoTone(saldo, tarifa) {
   if (saldo < 0) return { key: "credito", label: "A favor", color: "#0090C2", bg: "#E7F7FD" };
   if (saldo === 0) return { key: "aldia", label: "Al día", color: "#158F63", bg: "#E7F7F1" };
@@ -2044,6 +2092,7 @@ const GRUPOS_NAV_ADMIN = [
       { key: "evaluaciones", label: "Evaluaciones" },
     ],
   },
+  { key: "reportes", label: "Reportes", tabs: [{ key: "reportes", label: "Reportes" }] },
   { key: "staff", label: "Staff", tabs: [{ key: "staff", label: "Staff" }] },
 ];
 
@@ -2077,6 +2126,7 @@ const GRUPOS_NAV_ADMINISTRATIVO = [
       { key: "reporte", label: "Reporte semanal" },
     ],
   },
+  { key: "reportes", label: "Reportes", tabs: [{ key: "reportes", label: "Reportes" }] },
 ];
 
 // Dado un tab (ej. "asistencia"), devuelve la key del grupo al que
@@ -2187,6 +2237,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [filtroCategoriaEvento, setFiltroCategoriaEvento] = useState("");
   const [campeonatos, setCampeonatos] = useState([]);
   const [campeonatoModal, setCampeonatoModal] = useState(null); // null | {} (nuevo) | campeonato (editar)
+  const [resultados, setResultados] = useState([]); // resultados de partidos, solo para el Centro de reportes
 
   const enviandoRef = React.useRef(false);
   const [enviando, setEnviando] = useState(false);
@@ -2219,7 +2270,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [confirmDeleteLead, setConfirmDeleteLead] = useState(null);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, l, c, s, ev, cp, ci, inv] = await Promise.all([
+    const [a, p, l, c, s, ev, cp, ci, inv, rp, pg, pt] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("leads").select("*").order("created_at", { ascending: false }),
@@ -2229,6 +2280,12 @@ function PanelAdministrativo({ perfil, onLogout }) {
       supabase.from("campeonatos").select("*").order("fecha", { ascending: false }),
       supabase.from("campeonato_inscripciones").select("*"),
       supabase.from("inventario").select("*").order("nombre"),
+      // Solo para el reporte deportivo (récord de partidos) del Centro de
+      // reportes — administrativo no ve evaluaciones, esas siguen siendo
+      // un tema exclusivo de entrenadores/admin.
+      supabase.from("resultados_partido").select("*"),
+      supabase.from("partido_goles").select("*"),
+      supabase.from("partido_tarjetas").select("*"),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -2238,6 +2295,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
     setEventos((ev.data || []).map(eventoFromDb));
     setCampeonatos(juntarCampeonatosConInscripciones(cp.data || [], ci.data || []));
     setInventario((inv.data || []).map(inventarioFromDb));
+    setResultados(juntarResultadosConDetalle(rp.data || [], pg.data || [], pt.data || []));
     if (!silent && !a.error && !p.error && !l.error) {
       showToast(`Datos actualizados: ${(a.data || []).length} alumnos, ${(l.data || []).length} leads.`);
     }
@@ -2260,6 +2318,9 @@ function PanelAdministrativo({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "asistencias" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "eventos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "inventario" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "resultados_partido" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "partido_goles" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "partido_tarjetas" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -2723,6 +2784,22 @@ function PanelAdministrativo({ perfil, onLogout }) {
 
             {tab === "reporte" && (
               <ReporteSemanalView leads={leads} alumnos={alumnos} pagos={pagos} asistencias={asistencias} eventos={eventos} />
+            )}
+
+            {tab === "reportes" && (
+              <CentroReportesView
+                esAdmin={false}
+                alumnos={alumnos}
+                pagos={pagos}
+                gastos={[]}
+                asistencias={asistencias}
+                eventos={eventos}
+                resultados={resultados}
+                evaluaciones={[]}
+                campeonatos={campeonatos}
+                inventario={inventario}
+                staffNombre={() => null}
+              />
             )}
           </>
         )}
@@ -4251,6 +4328,22 @@ function PanelAdmin({ perfil, onLogout }) {
               <ReporteSemanalView leads={leads} alumnos={alumnos} pagos={pagos} asistencias={asistencias} eventos={eventos} />
             )}
 
+            {tab === "reportes" && (
+              <CentroReportesView
+                esAdmin
+                alumnos={alumnos}
+                pagos={pagos}
+                gastos={gastos}
+                asistencias={asistencias}
+                eventos={eventos}
+                resultados={resultados}
+                evaluaciones={evaluaciones}
+                campeonatos={campeonatos}
+                inventario={inventario}
+                staffNombre={(id) => (staff.find((p) => p.id === id) || {}).nombre}
+              />
+            )}
+
             {tab === "staff" && (
               <StaffView
                 staff={staff}
@@ -5679,6 +5772,842 @@ function MargenView({ alumnosActivos, totalGastosMes, monthLabelStr }) {
       <div className="stack two-col">
         <TablaMargen titulo="Por categoría" filas={porCategoria} />
         <TablaMargen titulo="Por horario" filas={porHorario} />
+      </div>
+    </div>
+  );
+}
+
+// ---------- Centro de reportes ----------
+// Consolida en un solo lugar reportes que antes vivían repartidos (o no
+// existían): financiero histórico (más allá del mes en curso que ya
+// muestra el Resumen), deportivo, asistencia y campeonatos/inventario.
+// Cada pestaña tiene su propio botón para exportar a CSV.
+//
+// "esAdmin" controla el detalle que se muestra — administrativo NO ve
+// gastos/margen (no tiene acceso a esos datos, ver políticas de "gastos"
+// en supabase-schema.sql) ni evaluaciones deportivas (es "un tema
+// deportivo/de entrenadores, no administrativo", misma regla que ya existe
+// para esa pestaña). El resto (cobrado, cartera, resultados de partidos,
+// asistencia, campeonatos, inventario) es igual para ambos roles.
+function CentroReportesView({
+  esAdmin,
+  alumnos,
+  pagos,
+  gastos,
+  asistencias,
+  eventos,
+  resultados,
+  evaluaciones,
+  campeonatos,
+  inventario,
+  staffNombre,
+}) {
+  const [subTab, setSubTab] = useState("financiero");
+  const [rango, setRango] = useState(rangoReporteDefault());
+
+  const SUBTABS = [
+    { key: "financiero", label: "Financiero" },
+    { key: "deportivo", label: "Deportivo" },
+    { key: "asistencia", label: "Asistencia" },
+    { key: "campeonatos", label: "Campeonatos e inventario" },
+  ];
+
+  return (
+    <div className="stack">
+      <div className="reportes-subnav">
+        {SUBTABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            className={"reportes-subnav-btn" + (subTab === t.key ? " active" : "")}
+            onClick={() => setSubTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {subTab !== "campeonatos" && (
+        <div className="panel reportes-rango">
+          <label>
+            Desde
+            <input type="date" value={rango.desde} onChange={(e) => setRango({ ...rango, desde: e.target.value })} />
+          </label>
+          <label>
+            Hasta
+            <input type="date" value={rango.hasta} onChange={(e) => setRango({ ...rango, hasta: e.target.value })} />
+          </label>
+        </div>
+      )}
+
+      {subTab === "financiero" && (
+        <ReporteFinancieroView esAdmin={esAdmin} alumnos={alumnos} pagos={pagos} gastos={gastos} rango={rango} />
+      )}
+      {subTab === "deportivo" && (
+        <ReporteDeportivoView
+          esAdmin={esAdmin}
+          eventos={eventos}
+          resultados={resultados}
+          evaluaciones={evaluaciones}
+          rango={rango}
+        />
+      )}
+      {subTab === "asistencia" && (
+        <ReporteAsistenciaView
+          esAdmin={esAdmin}
+          alumnos={alumnos}
+          asistencias={asistencias}
+          staffNombre={staffNombre}
+          rango={rango}
+        />
+      )}
+      {subTab === "campeonatos" && (
+        <ReporteCampeonatosInventarioView campeonatos={campeonatos} inventario={inventario} />
+      )}
+    </div>
+  );
+}
+
+// Reporte financiero histórico: cobrado (y gastado/margen si es admin) por
+// mes en el rango elegido, desglose por categoría de alumno, y la cartera
+// pendiente de hoy como referencia rápida (esa sí es "a hoy", no depende
+// del rango — el detalle completo alumno por alumno ya vive en "Cartera").
+function ReporteFinancieroView({ esAdmin, alumnos, pagos, gastos, rango }) {
+  const pagosRango = useMemo(
+    () => pagos.filter((p) => enRangoFecha(p.fecha, rango.desde, rango.hasta)),
+    [pagos, rango]
+  );
+  const gastosRango = useMemo(
+    () => (esAdmin ? gastos.filter((g) => enRangoFecha(g.fecha, rango.desde, rango.hasta)) : []),
+    [gastos, rango, esAdmin]
+  );
+
+  const totalCobrado = pagosRango.reduce((s, p) => s + Number(p.monto || 0), 0);
+  const totalGastado = esAdmin ? gastosRango.reduce((s, g) => s + Number(g.monto || 0), 0) : 0;
+  const margen = totalCobrado - totalGastado;
+
+  const meses = useMemo(() => mesesEnRango(rango.desde, rango.hasta), [rango]);
+  const serieMensual = useMemo(() => {
+    return meses.map((mk) => {
+      const cobrado = pagosRango.filter((p) => monthKeyOf(p.fecha) === mk).reduce((s, p) => s + Number(p.monto || 0), 0);
+      const gastado = esAdmin
+        ? gastosRango.filter((g) => monthKeyOf(g.fecha) === mk).reduce((s, g) => s + Number(g.monto || 0), 0)
+        : 0;
+      return { mesKey: mk, mes: monthLabel(mk).split(" ")[0], Cobrado: cobrado, Gastos: gastado };
+    });
+  }, [meses, pagosRango, gastosRango, esAdmin]);
+
+  const porCategoria = useMemo(() => {
+    const m = {};
+    pagosRango.forEach((p) => {
+      const al = alumnos.find((a) => a.id === p.alumnoId);
+      const cat = al ? al.categoria || "Sin categoría" : "Alumno eliminado";
+      m[cat] = (m[cat] || 0) + Number(p.monto || 0);
+    });
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [pagosRango, alumnos]);
+
+  const carteraTotal = alumnos
+    .filter((a) => a.activo && !a.soloCampeonato)
+    .reduce((s, a) => s + Number(a.saldoPendiente || 0), 0);
+
+  function exportar() {
+    const filas = [];
+    filas.push([`Reporte financiero: ${rango.desde} a ${rango.hasta}`]);
+    filas.push([]);
+    filas.push(esAdmin ? ["Mes", "Cobrado", "Gastado", "Margen"] : ["Mes", "Cobrado"]);
+    serieMensual.forEach((f) => {
+      filas.push(
+        esAdmin
+          ? [monthLabel(f.mesKey), f.Cobrado.toFixed(2), f.Gastos.toFixed(2), (f.Cobrado - f.Gastos).toFixed(2)]
+          : [monthLabel(f.mesKey), f.Cobrado.toFixed(2)]
+      );
+    });
+    filas.push([]);
+    filas.push(["Categoría", "Cobrado"]);
+    porCategoria.forEach(([cat, monto]) => filas.push([cat, monto.toFixed(2)]));
+    filas.push([]);
+    filas.push(["Totales"]);
+    filas.push(["Total cobrado", totalCobrado.toFixed(2)]);
+    if (esAdmin) {
+      filas.push(["Total gastado", totalGastado.toFixed(2)]);
+      filas.push(["Margen", margen.toFixed(2)]);
+    }
+    filas.push(["Cartera pendiente (hoy)", carteraTotal.toFixed(2)]);
+    descargarCsv(`reporte-financiero-${rango.desde}_a_${rango.hasta}.csv`, filas);
+  }
+
+  return (
+    <div className="stack">
+      <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+        <button className="btn-secondary" onClick={exportar}>
+          <FileDown size={15} /> Exportar CSV
+        </button>
+      </div>
+
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#E7F7FD", color: "#0090C2" }}>
+            <Wallet size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Cobrado en el rango</div>
+            <div className="kpi-value">{formatQ(totalCobrado)}</div>
+          </div>
+        </div>
+        {esAdmin && (
+          <>
+            <div className="kpi-card">
+              <div className="kpi-icon" style={{ background: "#FBEAE9", color: "#C13F3B" }}>
+                <ArrowDownRight size={18} />
+              </div>
+              <div>
+                <div className="kpi-label">Gastado en el rango</div>
+                <div className="kpi-value">{formatQ(totalGastado)}</div>
+              </div>
+            </div>
+            <div className="kpi-card">
+              <div
+                className="kpi-icon"
+                style={margen >= 0 ? { background: "#E7F7F1", color: "#158F63" } : { background: "#FBEAE9", color: "#C13F3B" }}
+              >
+                <ArrowUpRight size={18} />
+              </div>
+              <div>
+                <div className="kpi-label">Margen del rango</div>
+                <div className="kpi-value" style={{ color: margen >= 0 ? "#158F63" : "#C13F3B" }}>
+                  {formatQ(margen)}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#FCF1DD", color: "#B4790A" }}>
+            <AlertTriangle size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Cartera pendiente (hoy)</div>
+            <div className="kpi-value">{formatQ(carteraTotal)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h2>{esAdmin ? "Cobrado vs. gastos por mes" : "Cobrado por mes"}</h2>
+        <div style={{ width: "100%", height: 220 }}>
+          <ResponsiveContainer>
+            <BarChart data={serieMensual} margin={{ top: 4, right: 4, left: -12, bottom: 0 }} barGap={2}>
+              <CartesianGrid vertical={false} stroke="#F0F2F3" />
+              <XAxis dataKey="mes" tick={{ fontSize: 12, fill: "#8A8D90" }} axisLine={{ stroke: "#E4E8EA" }} tickLine={false} />
+              <YAxis
+                tick={{ fontSize: 11, fill: "#8A8D90" }}
+                axisLine={false}
+                tickLine={false}
+                width={54}
+                tickFormatter={(v) => `Q${v >= 1000 ? `${Math.round(v / 1000)}k` : v}`}
+              />
+              <Tooltip content={<ChartTooltip formatter={(v) => formatQ(v)} />} cursor={{ fill: "#F4F6F7" }} />
+              <Legend wrapperStyle={{ fontSize: 12.5, color: "#6C6F72" }} iconType="circle" iconSize={8} />
+              <Bar dataKey="Cobrado" fill="#0090C2" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              {esAdmin && <Bar dataKey="Gastos" fill="#C13F3B" radius={[4, 4, 0, 0]} maxBarSize={28} />}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h2>Cobrado por categoría</h2>
+        {porCategoria.length === 0 ? (
+          <div className="empty small">No hay pagos registrados en este rango.</div>
+        ) : (
+          <table className="tabla-reporte">
+            <thead>
+              <tr>
+                <th>Categoría</th>
+                <th>Cobrado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {porCategoria.map(([cat, monto]) => (
+                <tr key={cat}>
+                  <td>{cat}</td>
+                  <td>{formatQ(monto)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Reporte deportivo: récord de partidos (con resultado registrado) en el
+// rango, por categoría, y para admin también un resumen de las
+// evaluaciones por área (cuántas quedaron en cada nivel). Administrativo
+// no ve la parte de evaluaciones — ver nota de "esAdmin" arriba.
+function ReporteDeportivoView({ esAdmin, eventos, resultados, evaluaciones, rango }) {
+  const partidosRango = useMemo(() => {
+    return eventos
+      .filter((e) => e.tipo === "partido" && enRangoFecha(e.fecha, rango.desde, rango.hasta))
+      .map((e) => ({ evento: e, resultado: resultados.find((r) => r.eventoId === e.id) }))
+      .filter((x) => x.resultado)
+      .sort((a, b) => (b.evento.fecha || "").localeCompare(a.evento.fecha || ""));
+  }, [eventos, resultados, rango]);
+
+  const record = useMemo(() => {
+    const r = { ganado: 0, perdido: 0, empate: 0 };
+    partidosRango.forEach((p) => {
+      r[resultadoPartidoTipo(p.resultado)]++;
+    });
+    return r;
+  }, [partidosRango]);
+
+  const porCategoria = useMemo(() => {
+    const m = {};
+    partidosRango.forEach(({ evento, resultado }) => {
+      const cats = evento.categorias && evento.categorias.length ? evento.categorias : ["Sin categoría"];
+      const tipo = resultadoPartidoTipo(resultado);
+      cats.forEach((cat) => {
+        if (!m[cat]) m[cat] = { ganado: 0, perdido: 0, empate: 0 };
+        m[cat][tipo]++;
+      });
+    });
+    return Object.entries(m).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [partidosRango]);
+
+  const evaluacionesRango = useMemo(() => {
+    if (!esAdmin) return [];
+    return evaluaciones.filter((e) => enRangoFecha(e.fecha, rango.desde, rango.hasta));
+  }, [evaluaciones, rango, esAdmin]);
+
+  const nivelesPorArea = useMemo(() => {
+    return AREAS_EVALUACION.map((a) => {
+      const conteo = { muy_bien: 0, bien: 0, en_proceso: 0, sin_calificar: 0 };
+      evaluacionesRango.forEach((e) => {
+        const v = e.areas && e.areas[a.key];
+        if (v && conteo[v] != null) conteo[v]++;
+        else conteo.sin_calificar++;
+      });
+      return { area: a.titulo, ...conteo };
+    });
+  }, [evaluacionesRango]);
+
+  const totalPartidos = record.ganado + record.perdido + record.empate;
+  const efectividad = totalPartidos > 0 ? Math.round((record.ganado / totalPartidos) * 100) : 0;
+
+  function exportar() {
+    const filas = [];
+    filas.push([`Reporte deportivo: ${rango.desde} a ${rango.hasta}`]);
+    filas.push([]);
+    filas.push(["Partidos"]);
+    filas.push(["Fecha", "Rival", "Marcador", "Resultado", "Categorías"]);
+    partidosRango.forEach(({ evento, resultado }) => {
+      filas.push([
+        evento.fecha,
+        evento.rival || "",
+        `${resultado.golesFavor}-${resultado.golesContra}`,
+        resultadoPartidoLabel(resultado),
+        (evento.categorias || []).join(" / "),
+      ]);
+    });
+    filas.push([]);
+    filas.push(["Récord", "Ganados", "Empatados", "Perdidos"]);
+    filas.push(["Total", record.ganado, record.empate, record.perdido]);
+    if (esAdmin) {
+      filas.push([]);
+      filas.push(["Evaluaciones por área"]);
+      filas.push(["Área", "Muy bien", "Bien", "En proceso", "Sin calificar"]);
+      nivelesPorArea.forEach((n) => filas.push([n.area, n.muy_bien, n.bien, n.en_proceso, n.sin_calificar]));
+    }
+    descargarCsv(`reporte-deportivo-${rango.desde}_a_${rango.hasta}.csv`, filas);
+  }
+
+  return (
+    <div className="stack">
+      <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+        <button className="btn-secondary" onClick={exportar}>
+          <FileDown size={15} /> Exportar CSV
+        </button>
+      </div>
+
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#EFEFF0", color: "#404041" }}>
+            <ClipboardCheck size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Partidos con resultado</div>
+            <div className="kpi-value">{totalPartidos}</div>
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#E7F7F1", color: "#158F63" }}>
+            <ArrowUpRight size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Ganados</div>
+            <div className="kpi-value">{record.ganado}</div>
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#F1EFEA", color: "#6A6D70" }}>
+            <ArrowUpRight size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Empatados</div>
+            <div className="kpi-value">{record.empate}</div>
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#FBEAE9", color: "#C13F3B" }}>
+            <ArrowDownRight size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Perdidos</div>
+            <div className="kpi-value">{record.perdido}</div>
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#E7F7FD", color: "#0090C2" }}>
+            <CalendarClock size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Efectividad</div>
+            <div className="kpi-value">{efectividad}%</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h2>Récord por categoría</h2>
+        {porCategoria.length === 0 ? (
+          <div className="empty small">No hay partidos con resultado registrado en este rango.</div>
+        ) : (
+          <table className="tabla-reporte">
+            <thead>
+              <tr>
+                <th>Categoría</th>
+                <th>Ganados</th>
+                <th>Empatados</th>
+                <th>Perdidos</th>
+              </tr>
+            </thead>
+            <tbody>
+              {porCategoria.map(([cat, r]) => (
+                <tr key={cat}>
+                  <td>{cat}</td>
+                  <td>{r.ganado}</td>
+                  <td>{r.empate}</td>
+                  <td>{r.perdido}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {esAdmin ? (
+        <div className="panel">
+          <h2>Evaluaciones por área ({evaluacionesRango.length} evaluaciones en el rango)</h2>
+          {evaluacionesRango.length === 0 ? (
+            <div className="empty small">No hay evaluaciones registradas en este rango.</div>
+          ) : (
+            <table className="tabla-reporte">
+              <thead>
+                <tr>
+                  <th>Área</th>
+                  <th>Muy bien</th>
+                  <th>Bien</th>
+                  <th>En proceso</th>
+                  <th>Sin calificar</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nivelesPorArea.map((n) => (
+                  <tr key={n.area}>
+                    <td>{n.area}</td>
+                    <td>{n.muy_bien}</td>
+                    <td>{n.bien}</td>
+                    <td>{n.en_proceso}</td>
+                    <td>{n.sin_calificar}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ) : (
+        <div className="muted" style={{ fontSize: 13 }}>
+          Las evaluaciones deportivas son un tema de entrenadores/admin y no aparecen aquí.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Reporte de asistencia: % de asistencia por categoría, por alumno (los de
+// menor asistencia primero, para detectar ausentismo de un vistazo) y —
+// solo para admin, porque administrativo no maneja la lista de staff — por
+// entrenador.
+function ReporteAsistenciaView({ esAdmin, alumnos, asistencias, staffNombre, rango }) {
+  const asistenciasRango = useMemo(
+    () => asistencias.filter((a) => enRangoFecha(a.fecha, rango.desde, rango.hasta)),
+    [asistencias, rango]
+  );
+
+  const porAlumno = useMemo(() => {
+    const m = {};
+    asistenciasRango.forEach((a) => {
+      if (!m[a.alumnoId]) m[a.alumnoId] = { presentes: 0, total: 0 };
+      m[a.alumnoId].total++;
+      if (a.presente) m[a.alumnoId].presentes++;
+    });
+    return Object.entries(m)
+      .map(([alumnoId, d]) => {
+        const al = alumnos.find((x) => x.id === alumnoId);
+        return {
+          alumnoId,
+          nombre: al ? al.nombre : "Alumno eliminado",
+          categoria: al ? al.categoria || "Sin categoría" : "Sin categoría",
+          presentes: d.presentes,
+          total: d.total,
+          pct: d.total > 0 ? Math.round((d.presentes / d.total) * 100) : 0,
+        };
+      })
+      .sort((a, b) => a.pct - b.pct);
+  }, [asistenciasRango, alumnos]);
+
+  const porCategoria = useMemo(() => {
+    const m = {};
+    porAlumno.forEach((a) => {
+      if (!m[a.categoria]) m[a.categoria] = { presentes: 0, total: 0 };
+      m[a.categoria].presentes += a.presentes;
+      m[a.categoria].total += a.total;
+    });
+    return Object.entries(m)
+      .map(([cat, d]) => ({
+        categoria: cat,
+        presentes: d.presentes,
+        total: d.total,
+        pct: d.total > 0 ? Math.round((d.presentes / d.total) * 100) : 0,
+      }))
+      .sort((a, b) => a.categoria.localeCompare(b.categoria));
+  }, [porAlumno]);
+
+  const porEntrenador = useMemo(() => {
+    if (!esAdmin) return [];
+    const m = {};
+    asistenciasRango.forEach((a) => {
+      const key = a.entrenadorId || "sin_asignar";
+      if (!m[key]) m[key] = { presentes: 0, total: 0 };
+      m[key].total++;
+      if (a.presente) m[key].presentes++;
+    });
+    return Object.entries(m)
+      .map(([id, d]) => ({
+        nombre: id === "sin_asignar" ? "Sin asignar" : staffNombre(id) || "Entrenador ya no disponible",
+        presentes: d.presentes,
+        total: d.total,
+        pct: d.total > 0 ? Math.round((d.presentes / d.total) * 100) : 0,
+      }))
+      .sort((a, b) => b.total - a.total);
+  }, [asistenciasRango, esAdmin, staffNombre]);
+
+  const totalPresentes = asistenciasRango.filter((a) => a.presente).length;
+  const totalMarcas = asistenciasRango.length;
+  const pctGlobal = totalMarcas > 0 ? Math.round((totalPresentes / totalMarcas) * 100) : 0;
+
+  function exportar() {
+    const filas = [];
+    filas.push([`Reporte de asistencia: ${rango.desde} a ${rango.hasta}`]);
+    filas.push([]);
+    filas.push(["Alumno", "Categoría", "Presentes", "Total marcadas", "% asistencia"]);
+    porAlumno.forEach((a) => filas.push([a.nombre, a.categoria, a.presentes, a.total, a.pct]));
+    filas.push([]);
+    filas.push(["Categoría", "Presentes", "Total marcadas", "% asistencia"]);
+    porCategoria.forEach((c) => filas.push([c.categoria, c.presentes, c.total, c.pct]));
+    if (esAdmin) {
+      filas.push([]);
+      filas.push(["Entrenador", "Presentes", "Total marcadas", "% asistencia"]);
+      porEntrenador.forEach((e) => filas.push([e.nombre, e.presentes, e.total, e.pct]));
+    }
+    descargarCsv(`reporte-asistencia-${rango.desde}_a_${rango.hasta}.csv`, filas);
+  }
+
+  return (
+    <div className="stack">
+      <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+        <button className="btn-secondary" onClick={exportar}>
+          <FileDown size={15} /> Exportar CSV
+        </button>
+      </div>
+
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#E7F7FD", color: "#0090C2" }}>
+            <ClipboardCheck size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Asistencia global del rango</div>
+            <div className="kpi-value">{totalMarcas === 0 ? "—" : `${pctGlobal}%`}</div>
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#EFEFF0", color: "#404041" }}>
+            <Users size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Marcas registradas</div>
+            <div className="kpi-value">{totalMarcas}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h2>Por categoría</h2>
+        {porCategoria.length === 0 ? (
+          <div className="empty small">No hay asistencia marcada en este rango.</div>
+        ) : (
+          <table className="tabla-reporte">
+            <thead>
+              <tr>
+                <th>Categoría</th>
+                <th>Presentes</th>
+                <th>Marcadas</th>
+                <th>% asistencia</th>
+              </tr>
+            </thead>
+            <tbody>
+              {porCategoria.map((c) => (
+                <tr key={c.categoria}>
+                  <td>{c.categoria}</td>
+                  <td>{c.presentes}</td>
+                  <td>{c.total}</td>
+                  <td>{c.pct}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {esAdmin && (
+        <div className="panel">
+          <h2>Por entrenador</h2>
+          {porEntrenador.length === 0 ? (
+            <div className="empty small">No hay asistencia marcada en este rango.</div>
+          ) : (
+            <table className="tabla-reporte">
+              <thead>
+                <tr>
+                  <th>Entrenador</th>
+                  <th>Presentes</th>
+                  <th>Marcadas</th>
+                  <th>% asistencia</th>
+                </tr>
+              </thead>
+              <tbody>
+                {porEntrenador.map((e) => (
+                  <tr key={e.nombre}>
+                    <td>{e.nombre}</td>
+                    <td>{e.presentes}</td>
+                    <td>{e.total}</td>
+                    <td>{e.pct}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      <div className="panel">
+        <h2>Por alumno (menor asistencia primero)</h2>
+        {porAlumno.length === 0 ? (
+          <div className="empty small">No hay asistencia marcada en este rango.</div>
+        ) : (
+          <table className="tabla-reporte">
+            <thead>
+              <tr>
+                <th>Alumno</th>
+                <th>Categoría</th>
+                <th>Presentes</th>
+                <th>Marcadas</th>
+                <th>% asistencia</th>
+              </tr>
+            </thead>
+            <tbody>
+              {porAlumno.slice(0, 15).map((a) => (
+                <tr key={a.alumnoId}>
+                  <td>{a.nombre}</td>
+                  <td>{a.categoria}</td>
+                  <td>{a.presentes}</td>
+                  <td>{a.total}</td>
+                  <td>{a.pct}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {porAlumno.length > 15 && (
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+            Mostrando los 15 alumnos con menor asistencia. Exporta el CSV para ver la lista completa ({porAlumno.length} alumnos).
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Reporte de campeonatos (cuotas cobradas/pendientes) e inventario (estado
+// por categoría). No depende de un rango de fechas — es una foto del
+// estado actual de cada campeonato registrado y del inventario de hoy.
+function ReporteCampeonatosInventarioView({ campeonatos, inventario }) {
+  const campeonatosResumen = useMemo(() => {
+    return campeonatos
+      .map((c) => {
+        const inscritos = c.inscripciones.length;
+        const totalCuota = c.inscripciones.reduce((s, i) => s + Number(i.montoCuota || 0), 0);
+        const cobrado = c.inscripciones.filter((i) => i.pagado).reduce((s, i) => s + Number(i.montoCuota || 0), 0);
+        return { id: c.id, nombre: c.nombre, fecha: c.fecha, inscritos, totalCuota, cobrado, pendiente: totalCuota - cobrado };
+      })
+      .sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  }, [campeonatos]);
+
+  const inventarioPorCategoria = useMemo(() => {
+    const m = {};
+    inventario.forEach((i) => {
+      if (!m[i.categoria]) m[i.categoria] = { total: 0, danada: 0 };
+      m[i.categoria].total += Number(i.cantidadTotal || 0);
+      m[i.categoria].danada += Number(i.cantidadDanada || 0);
+    });
+    return Object.entries(m)
+      .map(([cat, d]) => ({ categoria: cat, total: d.total, danada: d.danada, buenEstado: d.total - d.danada }))
+      .sort((a, b) => a.categoria.localeCompare(b.categoria));
+  }, [inventario]);
+
+  const totalesCampeonatos = campeonatosResumen.reduce(
+    (acc, c) => ({
+      inscritos: acc.inscritos + c.inscritos,
+      totalCuota: acc.totalCuota + c.totalCuota,
+      cobrado: acc.cobrado + c.cobrado,
+      pendiente: acc.pendiente + c.pendiente,
+    }),
+    { inscritos: 0, totalCuota: 0, cobrado: 0, pendiente: 0 }
+  );
+
+  function exportar() {
+    const filas = [];
+    filas.push(["Campeonatos"]);
+    filas.push(["Nombre", "Fecha", "Inscritos", "Cuota total", "Cobrado", "Pendiente"]);
+    campeonatosResumen.forEach((c) =>
+      filas.push([c.nombre, c.fecha || "", c.inscritos, c.totalCuota.toFixed(2), c.cobrado.toFixed(2), c.pendiente.toFixed(2)])
+    );
+    filas.push([]);
+    filas.push(["Inventario por categoría"]);
+    filas.push(["Categoría", "Cantidad total", "Dañada", "Buen estado"]);
+    inventarioPorCategoria.forEach((i) => filas.push([i.categoria, i.total, i.danada, i.buenEstado]));
+    descargarCsv("reporte-campeonatos-inventario.csv", filas);
+  }
+
+  return (
+    <div className="stack">
+      <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+        <button className="btn-secondary" onClick={exportar}>
+          <FileDown size={15} /> Exportar CSV
+        </button>
+      </div>
+
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#E7F7FD", color: "#0090C2" }}>
+            <Users size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Inscripciones a campeonatos</div>
+            <div className="kpi-value">{totalesCampeonatos.inscritos}</div>
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#E7F7F1", color: "#158F63" }}>
+            <Wallet size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Cuotas cobradas</div>
+            <div className="kpi-value">{formatQ(totalesCampeonatos.cobrado)}</div>
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#FCF1DD", color: "#B4790A" }}>
+            <AlertTriangle size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Cuotas pendientes</div>
+            <div className="kpi-value">{formatQ(totalesCampeonatos.pendiente)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h2>Campeonatos</h2>
+        {campeonatosResumen.length === 0 ? (
+          <div className="empty small">Todavía no hay campeonatos registrados.</div>
+        ) : (
+          <table className="tabla-reporte">
+            <thead>
+              <tr>
+                <th>Campeonato</th>
+                <th>Fecha</th>
+                <th>Inscritos</th>
+                <th>Cuota total</th>
+                <th>Cobrado</th>
+                <th>Pendiente</th>
+              </tr>
+            </thead>
+            <tbody>
+              {campeonatosResumen.map((c) => (
+                <tr key={c.id}>
+                  <td>{c.nombre}</td>
+                  <td>{c.fecha ? formatDiaLargo(c.fecha) : "—"}</td>
+                  <td>{c.inscritos}</td>
+                  <td>{formatQ(c.totalCuota)}</td>
+                  <td>{formatQ(c.cobrado)}</td>
+                  <td>{formatQ(c.pendiente)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="panel">
+        <h2>Inventario por categoría</h2>
+        {inventarioPorCategoria.length === 0 ? (
+          <div className="empty small">Todavía no hay artículos en el inventario.</div>
+        ) : (
+          <table className="tabla-reporte">
+            <thead>
+              <tr>
+                <th>Categoría</th>
+                <th>Cantidad total</th>
+                <th>Dañada</th>
+                <th>Buen estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {inventarioPorCategoria.map((i) => (
+                <tr key={i.categoria}>
+                  <td>{i.categoria}</td>
+                  <td>{i.total}</td>
+                  <td>{i.danada}</td>
+                  <td>{i.buenEstado}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
@@ -10029,6 +10958,18 @@ function Styles() {
         #reporte-evaluacion { position: absolute; top: 0; left: 0; width: 100%; box-shadow: none; border-radius: 0; padding: 10px; }
         .no-print { display: none !important; }
       }
+
+      /* Centro de reportes */
+      .reportes-subnav { display: flex; gap: 6px; flex-wrap: wrap; }
+      .reportes-subnav-btn { border: 1px solid var(--border-soft); background: #fff; padding: 8px 14px; border-radius: var(--radius-pill); font-size: 13px; font-weight: 600; color: #6C6F72; cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s; }
+      .reportes-subnav-btn:hover { background: #F4F6F7; }
+      .reportes-subnav-btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+      .reportes-rango { display: flex; gap: 16px; flex-wrap: wrap; padding: 12px 14px; }
+      .reportes-rango label { font-size: 12.5px; color: #6C6F72; display: flex; flex-direction: column; gap: 4px; font-weight: 500; }
+      .tabla-reporte { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+      .tabla-reporte th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; color: #8A8D90; padding: 7px 10px; border-bottom: 1px solid var(--border-soft); }
+      .tabla-reporte td { padding: 8px 10px; border-bottom: 1px solid var(--border-soft); color: var(--charcoal); }
+      .tabla-reporte tbody tr:last-child td { border-bottom: none; }
 
       /* Cartera / recordatorios de pago */
       .cartera-fila { display: flex; align-items: center; gap: 14px; padding: 12px 14px; flex-wrap: wrap; }
