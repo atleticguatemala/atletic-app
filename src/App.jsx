@@ -114,6 +114,7 @@ function alumnoFromDb(r) {
     tallaUniforme: r.talla_uniforme,
     uniformeEntregado: !!r.uniforme_entregado,
     soloCampeonato: !!r.solo_campeonato,
+    sedes: Array.isArray(r.sedes) ? r.sedes : [],
   };
 }
 function alumnoToDb(a) {
@@ -141,6 +142,7 @@ function alumnoToDb(a) {
     talla_uniforme: a.tallaUniforme || null,
     uniforme_entregado: !!a.uniformeEntregado,
     solo_campeonato: !!a.soloCampeonato,
+    sedes: Array.isArray(a.sedes) ? a.sedes : [],
   };
 }
 
@@ -189,7 +191,15 @@ function pagoFromDb(r) {
 }
 
 function gastoFromDb(r) {
-  return { id: r.id, categoria: r.categoria, monto: Number(r.monto) || 0, fecha: r.fecha, nota: r.nota };
+  return {
+    id: r.id,
+    categoria: r.categoria,
+    monto: Number(r.monto) || 0,
+    fecha: r.fecha,
+    nota: r.nota,
+    sede: r.sede,
+    entrenadorId: r.entrenador_id,
+  };
 }
 
 function cargoFromDb(r) {
@@ -2798,6 +2808,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
                 evaluaciones={[]}
                 campeonatos={campeonatos}
                 inventario={inventario}
+                horasSedeEntrenadores={[]}
                 staffNombre={() => null}
               />
             )}
@@ -2931,6 +2942,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [ejercicios, setEjercicios] = useState([]);
   const [sesiones, setSesiones] = useState([]);
   const [resultados, setResultados] = useState([]);
+  const [horasSedeEntrenadores, setHorasSedeEntrenadores] = useState([]);
   const [tab, setTab] = useState("resumen");
   const [openGroup, setOpenGroup] = useState("resumen"); // grupo de la barra lateral abierto
   const [toast, setToast] = useState(null);
@@ -3006,6 +3018,8 @@ function PanelAdmin({ perfil, onLogout }) {
     monto: "",
     fecha: todayISO(),
     nota: "",
+    sede: "",
+    entrenadorId: "",
   });
   const [confirmDeleteGasto, setConfirmDeleteGasto] = useState(null);
   const [confirmDeletePago, setConfirmDeletePago] = useState(null);
@@ -3015,7 +3029,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [reloading, setReloading] = useState(false);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv, eva] = await Promise.all([
+    const [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv, eva, hs] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("cargos").select("*").order("created_at", { ascending: false }),
@@ -3035,6 +3049,7 @@ function PanelAdmin({ perfil, onLogout }) {
       supabase.from("campeonato_inscripciones").select("*"),
       supabase.from("inventario").select("*").order("nombre"),
       supabase.from("evaluaciones").select("*").order("fecha", { ascending: false }),
+      supabase.from("entrenador_horas_sede").select("*"),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -3051,8 +3066,9 @@ function PanelAdmin({ perfil, onLogout }) {
     setCampeonatos(juntarCampeonatosConInscripciones(cp.data || [], ci.data || []));
     setInventario((inv.data || []).map(inventarioFromDb));
     setEvaluaciones((eva.data || []).map(evaluacionFromDb));
+    setHorasSedeEntrenadores(hs.data || []);
 
-    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv, eva].some((r) => r.error);
+    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv, eva, hs].some((r) => r.error);
     if (algunFallo) {
       showToast(
         "No se pudo cargar toda tu información (revisa tu conexión). Dale a \"Recargar\" para intentar de nuevo.",
@@ -3088,6 +3104,7 @@ function PanelAdmin({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "campeonato_inscripciones" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "inventario" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "evaluaciones" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "entrenador_horas_sede" }, () => cargarDatos({ silent: true }))
       .subscribe();
     return () => {
       supabase.removeChannel(canal);
@@ -3323,12 +3340,14 @@ function PanelAdmin({ perfil, onLogout }) {
     try {
       const esNuevo = !data.id;
       const payload = perfilStaffToDb(data);
+      let entrenadorId = data.id;
       if (esNuevo) {
         if (!data.id_nuevo || !data.id_nuevo.trim()) {
           showToast("Pega el ID del usuario (de Supabase → Authentication → Users).", true);
           return;
         }
-        const { error } = await supabase.from("perfiles").insert([{ id: data.id_nuevo.trim(), ...payload }]);
+        entrenadorId = data.id_nuevo.trim();
+        const { error } = await supabase.from("perfiles").insert([{ id: entrenadorId, ...payload }]);
         if (error) {
           showToast(
             error.message && error.message.includes("foreign key")
@@ -3343,6 +3362,20 @@ function PanelAdmin({ perfil, onLogout }) {
         if (error) {
           showToast("No se pudo guardar (revisa tu conexión). Inténtalo de nuevo.", true);
           return;
+        }
+      }
+      // Horas por sede: solo aplica a entrenadores. Se reemplazan todas sus
+      // filas (borrar + reinsertar) para que quede igual a lo que se ve en
+      // el formulario, sin tener que calcular qué cambió.
+      if (data.rol === "entrenador" && data.horasSede) {
+        await supabase.from("entrenador_horas_sede").delete().eq("entrenador_id", entrenadorId);
+        const filas = SEDES.filter((s) => Number(data.horasSede[s]) > 0).map((s) => ({
+          entrenador_id: entrenadorId,
+          sede: s,
+          horas_semana: Number(data.horasSede[s]),
+        }));
+        if (filas.length > 0) {
+          await supabase.from("entrenador_horas_sede").insert(filas);
         }
       }
       await cargarDatos({ silent: true });
@@ -3934,15 +3967,18 @@ function PanelAdmin({ perfil, onLogout }) {
         showToast("Ingresa un monto de gasto válido.", true);
         return;
       }
+      const esPagoEntrenador = gastoForm.categoria === "Pago a entrenador";
       const { error } = await supabase.from("gastos").insert({
         categoria: gastoForm.categoria,
         monto,
         fecha: gastoForm.fecha,
         nota: gastoForm.nota || null,
+        sede: !esPagoEntrenador && gastoForm.sede ? gastoForm.sede : null,
+        entrenador_id: esPagoEntrenador && gastoForm.entrenadorId ? gastoForm.entrenadorId : null,
       });
       if (!error) {
         await cargarDatos({ silent: true });
-        setGastoForm({ categoria: gastoForm.categoria, monto: "", fecha: todayISO(), nota: "" });
+        setGastoForm({ categoria: gastoForm.categoria, monto: "", fecha: todayISO(), nota: "", sede: "", entrenadorId: "" });
         showToast("Gasto registrado.");
       } else {
         showToast("No se pudo guardar el gasto (revisa tu conexión). Vuelve a intentarlo.", true);
@@ -4084,28 +4120,9 @@ function PanelAdmin({ perfil, onLogout }) {
   const asistenciasHoy = asistencias.filter((x) => x.fecha === todayISO());
   const presentesHoy = asistenciasHoy.filter((x) => x.presente).length;
 
-  // Datos para las gráficas del Resumen: cobrado vs. gastos de los
-  // últimos 6 meses (incluyendo el actual), y % de asistencia de los
-  // últimos 14 días con registros.
-  const chartIngresos = useMemo(() => {
-    const meses = [];
-    const base = new Date();
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(base.getFullYear(), base.getMonth() - i, 1);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      meses.push({ key, label: monthLabel(key).replace(/ de \d+$/, "").slice(0, 3) });
-    }
-    return meses.map(({ key, label }) => ({
-      mes: label,
-      Cobrado: Number(
-        pagos.filter((p) => monthKeyOf(p.fecha) === key).reduce((s, p) => s + Number(p.monto || 0), 0).toFixed(2)
-      ),
-      Gastos: Number(
-        gastos.filter((g) => monthKeyOf(g.fecha) === key).reduce((s, g) => s + Number(g.monto || 0), 0).toFixed(2)
-      ),
-    }));
-  }, [pagos, gastos]);
-
+  // Dato para la gráfica del Resumen: % de asistencia de los últimos 14
+  // días con registros. La gráfica de cobrado vs. gastos de 6 meses que
+  // vivía aquí se quitó — ese historial ahora vive en Reportes > Financiero.
   const chartAsistencia = useMemo(() => {
     const porFecha = new Map();
     asistencias.forEach((a) => {
@@ -4208,7 +4225,6 @@ function PanelAdmin({ perfil, onLogout }) {
                 presentesHoy={presentesHoy}
                 asistenciasHoyCount={asistenciasHoy.length}
                 onIrAsistencia={() => irTab("asistencia")}
-                chartIngresos={chartIngresos}
                 chartAsistencia={chartAsistencia}
                 pendientesMesActual={pendientesMesActual}
                 onExportarMes={exportarResumenMes}
@@ -4252,6 +4268,7 @@ function PanelAdmin({ perfil, onLogout }) {
                 totalGastosMes={totalGastosMes}
                 monthLabelStr={monthLabel(currentMonthKey)}
                 enviando={enviando}
+                staff={staff}
               />
             )}
 
@@ -4340,6 +4357,7 @@ function PanelAdmin({ perfil, onLogout }) {
                 evaluaciones={evaluaciones}
                 campeonatos={campeonatos}
                 inventario={inventario}
+                horasSedeEntrenadores={horasSedeEntrenadores}
                 staffNombre={(id) => (staff.find((p) => p.id === id) || {}).nombre}
               />
             )}
@@ -4574,7 +4592,15 @@ function PanelAdmin({ perfil, onLogout }) {
 
       {staffModal !== null && (
         <StaffModal
-          initial={staffModal}
+          initial={{
+            ...staffModal,
+            horasSede: horasSedeEntrenadores
+              .filter((h) => h.entrenador_id === staffModal.id)
+              .reduce((acc, h) => {
+                acc[h.sede] = h.horas_semana;
+                return acc;
+              }, {}),
+          }}
           onSave={guardarStaff}
           onCancel={() => setStaffModal(null)}
           enviando={enviando}
@@ -4796,7 +4822,6 @@ function ResumenView({
   presentesHoy,
   asistenciasHoyCount,
   onIrAsistencia,
-  chartIngresos,
   chartAsistencia,
   pendientesMesActual,
   onExportarMes,
@@ -4888,42 +4913,23 @@ function ResumenView({
         </div>
       </div>
 
-      <div className="stack two-col">
-        <div className="panel">
-          <h2>Cobrado vs. gastos (últimos 6 meses)</h2>
+      <div className="panel">
+        <h2>Asistencia (últimos días con registro)</h2>
+        {!hayAsistencia ? (
+          <div className="empty small">Todavía no hay asistencia marcada para graficar.</div>
+        ) : (
           <div style={{ width: "100%", height: 220 }}>
             <ResponsiveContainer>
-              <BarChart data={chartIngresos} margin={{ top: 4, right: 4, left: -12, bottom: 0 }} barGap={2}>
+              <LineChart data={chartAsistencia} margin={{ top: 4, right: 12, left: -12, bottom: 0 }}>
                 <CartesianGrid vertical={false} stroke="#F0F2F3" />
-                <XAxis dataKey="mes" tick={{ fontSize: 12, fill: "#8A8D90" }} axisLine={{ stroke: "#E4E8EA" }} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: "#8A8D90" }} axisLine={false} tickLine={false} width={54} tickFormatter={(v) => `Q${v >= 1000 ? `${Math.round(v / 1000)}k` : v}`} />
-                <Tooltip content={<ChartTooltip formatter={(v) => formatQ(v)} />} cursor={{ fill: "#F4F6F7" }} />
-                <Legend wrapperStyle={{ fontSize: 12.5, color: "#6C6F72" }} iconType="circle" iconSize={8} />
-                <Bar dataKey="Cobrado" fill="#0090C2" radius={[4, 4, 0, 0]} maxBarSize={28} />
-                <Bar dataKey="Gastos" fill="#C13F3B" radius={[4, 4, 0, 0]} maxBarSize={28} />
-              </BarChart>
+                <XAxis dataKey="fecha" tick={{ fontSize: 12, fill: "#8A8D90" }} axisLine={{ stroke: "#E4E8EA" }} tickLine={false} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#8A8D90" }} axisLine={false} tickLine={false} width={40} tickFormatter={(v) => `${v}%`} />
+                <Tooltip content={<ChartTooltip formatter={(v) => `${v}%`} />} cursor={{ stroke: "#E4E8EA" }} />
+                <Line type="monotone" dataKey="Asistencia" stroke="#00B6F1" strokeWidth={2} dot={{ r: 3, fill: "#00B6F1", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+              </LineChart>
             </ResponsiveContainer>
           </div>
-        </div>
-
-        <div className="panel">
-          <h2>Asistencia (últimos días con registro)</h2>
-          {!hayAsistencia ? (
-            <div className="empty small">Todavía no hay asistencia marcada para graficar.</div>
-          ) : (
-            <div style={{ width: "100%", height: 220 }}>
-              <ResponsiveContainer>
-                <LineChart data={chartAsistencia} margin={{ top: 4, right: 12, left: -12, bottom: 0 }}>
-                  <CartesianGrid vertical={false} stroke="#F0F2F3" />
-                  <XAxis dataKey="fecha" tick={{ fontSize: 12, fill: "#8A8D90" }} axisLine={{ stroke: "#E4E8EA" }} tickLine={false} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#8A8D90" }} axisLine={false} tickLine={false} width={40} tickFormatter={(v) => `${v}%`} />
-                  <Tooltip content={<ChartTooltip formatter={(v) => `${v}%`} />} cursor={{ stroke: "#E4E8EA" }} />
-                  <Line type="monotone" dataKey="Asistencia" stroke="#00B6F1" strokeWidth={2} dot={{ r: 3, fill: "#00B6F1", strokeWidth: 0 }} activeDot={{ r: 5 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
+        )}
       </div>
 
       <div className="panel">
@@ -5448,7 +5454,10 @@ function GastoView({
   totalGastosMes,
   monthLabelStr,
   enviando,
+  staff,
 }) {
+  const esPagoEntrenador = gastoForm.categoria === "Pago a entrenador";
+  const entrenadoresActivos = (staff || []).filter((p) => p.rol === "entrenador" && p.activo !== false);
   return (
     <div className="stack two-col">
       <div className="panel">
@@ -5493,6 +5502,38 @@ function GastoView({
               />
             </label>
           </div>
+
+          {esPagoEntrenador ? (
+            <label>
+              Entrenador (opcional — permite repartir el pago entre sedes)
+              <select
+                value={gastoForm.entrenadorId}
+                onChange={(e) => setGastoForm({ ...gastoForm, entrenadorId: e.target.value })}
+              >
+                <option value="">Sin especificar</option>
+                {entrenadoresActivos.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.nombre}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <label>
+              Sede (opcional)
+              <select
+                value={gastoForm.sede}
+                onChange={(e) => setGastoForm({ ...gastoForm, sede: e.target.value })}
+              >
+                <option value="">Sin especificar / general</option>
+                {SEDES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           <label>
             Nota (opcional)
@@ -5800,6 +5841,7 @@ function CentroReportesView({
   evaluaciones,
   campeonatos,
   inventario,
+  horasSedeEntrenadores,
   staffNombre,
 }) {
   const [subTab, setSubTab] = useState("financiero");
@@ -5810,6 +5852,7 @@ function CentroReportesView({
     { key: "deportivo", label: "Deportivo" },
     { key: "asistencia", label: "Asistencia" },
     { key: "campeonatos", label: "Campeonatos e inventario" },
+    ...(esAdmin ? [{ key: "sede", label: "Rentabilidad por sede" }] : []),
   ];
 
   return (
@@ -5863,6 +5906,16 @@ function CentroReportesView({
       )}
       {subTab === "campeonatos" && (
         <ReporteCampeonatosInventarioView campeonatos={campeonatos} inventario={inventario} />
+      )}
+      {esAdmin && subTab === "sede" && (
+        <ReportePorSedeView
+          alumnos={alumnos}
+          pagos={pagos}
+          gastos={gastos}
+          horasSedeEntrenadores={horasSedeEntrenadores}
+          staffNombre={staffNombre}
+          rango={rango}
+        />
       )}
     </div>
   );
@@ -6608,6 +6661,151 @@ function ReporteCampeonatosInventarioView({ campeonatos, inventario }) {
             </tbody>
           </table>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Reporte de rentabilidad por sede: solo admin (gastos completos, igual
+// que el resto de Financiero). Lo cobrado se reparte por igual entre las
+// sedes de cada alumno (si tiene 2, la mitad a cada una); lo gastado: un
+// gasto con sede propia se cuenta completo ahí, "Pago a entrenador" sin
+// sede propia se reparte según las horas que ese entrenador tenga
+// declaradas en cada sede, y lo que no se puede ubicar en ninguna sede
+// (gastos generales, o pagos a entrenador sin horas declaradas) se deja
+// aparte para que no infle ni desinfle la rentabilidad de ninguna sede.
+function ReportePorSedeView({ alumnos, pagos, gastos, horasSedeEntrenadores, staffNombre, rango }) {
+  const pagosRango = useMemo(
+    () => pagos.filter((p) => enRangoFecha(p.fecha, rango.desde, rango.hasta)),
+    [pagos, rango]
+  );
+  const gastosRango = useMemo(
+    () => gastos.filter((g) => enRangoFecha(g.fecha, rango.desde, rango.hasta)),
+    [gastos, rango]
+  );
+
+  const horasPorEntrenador = useMemo(() => {
+    const m = {};
+    (horasSedeEntrenadores || []).forEach((h) => {
+      if (!m[h.entrenador_id]) m[h.entrenador_id] = {};
+      m[h.entrenador_id][h.sede] = Number(h.horas_semana) || 0;
+    });
+    return m;
+  }, [horasSedeEntrenadores]);
+
+  const { cobradoPorSede, gastadoPorSede, sinSedeCobrado, generalesGastado, entrenadoresSinHoras } = useMemo(() => {
+    const cobrado = {};
+    const gastado = {};
+    SEDES.forEach((s) => {
+      cobrado[s] = 0;
+      gastado[s] = 0;
+    });
+    let sinSede = 0;
+    let generales = 0;
+    const alumnoPorId = {};
+    alumnos.forEach((a) => (alumnoPorId[a.id] = a));
+
+    pagosRango.forEach((p) => {
+      const al = alumnoPorId[p.alumnoId];
+      const sedes = al && Array.isArray(al.sedes) ? al.sedes.filter((s) => SEDES.includes(s)) : [];
+      const monto = Number(p.monto || 0);
+      if (sedes.length === 0) {
+        sinSede += monto;
+      } else {
+        sedes.forEach((s) => (cobrado[s] += monto / sedes.length));
+      }
+    });
+
+    const sinHoras = new Set();
+    gastosRango.forEach((g) => {
+      const monto = Number(g.monto || 0);
+      if (g.sede && SEDES.includes(g.sede)) {
+        gastado[g.sede] += monto;
+        return;
+      }
+      if (g.categoria === "Pago a entrenador" && g.entrenadorId) {
+        const horas = horasPorEntrenador[g.entrenadorId];
+        const totalHoras = horas ? SEDES.reduce((s, sede) => s + (horas[sede] || 0), 0) : 0;
+        if (totalHoras > 0) {
+          SEDES.forEach((sede) => {
+            const proporcion = (horas[sede] || 0) / totalHoras;
+            if (proporcion > 0) gastado[sede] += monto * proporcion;
+          });
+          return;
+        }
+        sinHoras.add(g.entrenadorId);
+      }
+      generales += monto;
+    });
+
+    return {
+      cobradoPorSede: cobrado,
+      gastadoPorSede: gastado,
+      sinSedeCobrado: sinSede,
+      generalesGastado: generales,
+      entrenadoresSinHoras: Array.from(sinHoras),
+    };
+  }, [pagosRango, gastosRango, alumnos, horasPorEntrenador]);
+
+  function exportar() {
+    const filas = [];
+    filas.push([`Rentabilidad por sede: ${rango.desde} a ${rango.hasta}`]);
+    filas.push([]);
+    filas.push(["Sede", "Cobrado", "Gastado", "Margen"]);
+    SEDES.forEach((s) => {
+      filas.push([s, cobradoPorSede[s].toFixed(2), gastadoPorSede[s].toFixed(2), (cobradoPorSede[s] - gastadoPorSede[s]).toFixed(2)]);
+    });
+    filas.push([]);
+    filas.push(["Sin sede asignada (alumno)", sinSedeCobrado.toFixed(2)]);
+    filas.push(["Gastos generales (sin sede)", generalesGastado.toFixed(2)]);
+    descargarCsv(`reporte-por-sede-${rango.desde}_a_${rango.hasta}.csv`, filas);
+  }
+
+  return (
+    <div className="stack">
+      <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+        <button className="btn-secondary" onClick={exportar}>
+          <FileDown size={15} /> Exportar CSV
+        </button>
+      </div>
+
+      {entrenadoresSinHoras.length > 0 && (
+        <div className="form-error">
+          Sin horas declaradas para repartir su pago:{" "}
+          {entrenadoresSinHoras.map((id) => staffNombre(id) || "Entrenador").join(", ")}. Ese gasto quedó en
+          "Gastos generales" — agrégale sus horas por sede en Staff para poder repartirlo.
+        </div>
+      )}
+
+      <div className="panel">
+        <h2>Cobrado, gastado y margen por sede</h2>
+        <table className="tabla-reporte">
+          <thead>
+            <tr>
+              <th>Sede</th>
+              <th>Cobrado</th>
+              <th>Gastado</th>
+              <th>Margen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {SEDES.map((s) => {
+              const margen = cobradoPorSede[s] - gastadoPorSede[s];
+              return (
+                <tr key={s}>
+                  <td>{s}</td>
+                  <td>{formatQ(cobradoPorSede[s])}</td>
+                  <td>{formatQ(gastadoPorSede[s])}</td>
+                  <td style={{ color: margen >= 0 ? "#158F63" : "#C13F3B" }}>{formatQ(margen)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="muted" style={{ marginTop: 10 }}>
+          Sin sede asignada (alumno): {formatQ(sinSedeCobrado)} cobrado sin repartir · Gastos generales (sin sede):{" "}
+          {formatQ(generalesGastado)}
+        </p>
       </div>
     </div>
   );
@@ -9811,6 +10009,10 @@ function StaffModal({ initial, onSave, onCancel, enviando }) {
     telefono: initial.telefono || "",
     correo: initial.correo || "",
     categorias: initial.categorias || [],
+    horasSede: SEDES.reduce((acc, s) => {
+      acc[s] = initial.horasSede && initial.horasSede[s] != null ? String(initial.horasSede[s]) : "";
+      return acc;
+    }, {}),
   });
   const [error, setError] = useState(null);
 
@@ -9821,6 +10023,10 @@ function StaffModal({ initial, onSave, onCancel, enviando }) {
       else set.add(c);
       return { ...prev, categorias: Array.from(set) };
     });
+  }
+
+  function setHorasSede(sede, valor) {
+    setForm((prev) => ({ ...prev, horasSede: { ...prev.horasSede, [sede]: valor } }));
   }
 
   function handleSubmit(e) {
@@ -9909,6 +10115,23 @@ function StaffModal({ initial, onSave, onCancel, enviando }) {
                   <label key={c} className="checkbox-item">
                     <input type="checkbox" checked={form.categorias.includes(c)} onChange={() => toggleCategoria(c)} />
                     {c}
+                  </label>
+                ))}
+              </div>
+              <div className="form-section-label">
+                Horas por sede (opcional — para repartir su pago automáticamente en el reporte por sede)
+              </div>
+              <div className="form-row">
+                {SEDES.map((s) => (
+                  <label key={s}>
+                    {s}
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="0"
+                      value={form.horasSede[s] || ""}
+                      onChange={(e) => setHorasSede(s, e.target.value)}
+                    />
                   </label>
                 ))}
               </div>
@@ -10055,8 +10278,18 @@ function AlumnoModal({ initial, onSave, onCancel, enviando, showToast }) {
     tallaUniforme: initial.tallaUniforme || "",
     uniformeEntregado: !!initial.uniformeEntregado,
     soloCampeonato: !!initial.soloCampeonato,
+    sedes: Array.isArray(initial.sedes) ? initial.sedes : [],
   });
   const [error, setError] = useState(null);
+
+  function toggleSede(s) {
+    setForm((prev) => {
+      const set = new Set(prev.sedes);
+      if (set.has(s)) set.delete(s);
+      else set.add(s);
+      return { ...prev, sedes: Array.from(set) };
+    });
+  }
   const [subiendoFoto, setSubiendoFoto] = useState(false);
 
   // Sube la foto apenas se elige el archivo (no espera a que se guarde todo
@@ -10231,6 +10464,18 @@ function AlumnoModal({ initial, onSave, onCancel, enviando, showToast }) {
                 ))}
               </select>
             </label>
+          </div>
+          <div className="form-section-label">
+            Sedes {form.sedes.length > 0 && `(${form.sedes.length})`}
+            {form.sedes.length === 0 && <span className="muted"> — sin asignar todavía</span>}
+          </div>
+          <div className="evento-convocados-lista">
+            {SEDES.map((s) => (
+              <label key={s} className="checkbox-item">
+                <input type="checkbox" checked={form.sedes.includes(s)} onChange={() => toggleSede(s)} />
+                {s}
+              </label>
+            ))}
           </div>
           <label className="checkbox-item" style={{ border: "1px solid var(--border-soft)", borderRadius: 10 }}>
             <input
