@@ -1914,11 +1914,11 @@ function PanelAsistente({ perfil, onLogout }) {
 
   const [pagoForm, setPagoForm] = useState({
     alumnoId: "",
-    monto: "",
+    montoMensualidad: "",
+    montoInscripcion: "",
     metodo: "Efectivo",
     fecha: todayISO(),
     nota: "",
-    tipo: "mensualidad",
   });
 
   async function cargar() {
@@ -1958,26 +1958,46 @@ function PanelAsistente({ perfil, onLogout }) {
     if (e && e.preventDefault) e.preventDefault();
     if (!iniciarEnvio()) return;
     try {
-      const monto = parseMonto(pagoForm.monto);
-      if (!pagoForm.alumnoId || isNaN(monto) || monto <= 0) {
-        showToast("Selecciona un alumno e ingresa un monto válido.", true);
+      const montoMensualidad = parseMonto(pagoForm.montoMensualidad);
+      const montoInscripcion = parseMonto(pagoForm.montoInscripcion);
+      const incluyeMensualidad = pagoForm.montoMensualidad !== "" && !isNaN(montoMensualidad) && montoMensualidad > 0;
+      const incluyeInscripcion = pagoForm.montoInscripcion !== "" && !isNaN(montoInscripcion) && montoInscripcion > 0;
+      if (!pagoForm.alumnoId || (!incluyeMensualidad && !incluyeInscripcion)) {
+        showToast("Selecciona un alumno e ingresa al menos un monto válido (mensualidad y/o inscripción).", true);
         return;
       }
-      const { error } = await supabase.rpc("registrar_pago", {
-        p_alumno_id: pagoForm.alumnoId,
-        p_monto: monto,
-        p_metodo: pagoForm.metodo,
-        p_fecha: pagoForm.fecha,
-        p_nota: pagoForm.nota || null,
-        p_tipo: pagoForm.tipo || "mensualidad",
-      });
-      if (!error) {
-        await cargar();
-        setPagoForm({ alumnoId: "", monto: "", metodo: "Efectivo", fecha: todayISO(), nota: "", tipo: "mensualidad" });
-        showToast("Pago registrado.");
+      // Si llenó los dos montos, se registran como dos pagos separados (uno
+      // de cada tipo) en la misma operación — cada uno afecta el saldo
+      // correctamente según su tipo.
+      const pagosARegistrar = [];
+      if (incluyeMensualidad) pagosARegistrar.push({ monto: montoMensualidad, tipo: "mensualidad" });
+      if (incluyeInscripcion) pagosARegistrar.push({ monto: montoInscripcion, tipo: "inscripcion" });
+
+      let huboError = false;
+      for (const p of pagosARegistrar) {
+        const { error } = await supabase.rpc("registrar_pago", {
+          p_alumno_id: pagoForm.alumnoId,
+          p_monto: p.monto,
+          p_metodo: pagoForm.metodo,
+          p_fecha: pagoForm.fecha,
+          p_nota: pagoForm.nota || null,
+          p_tipo: p.tipo,
+        });
+        if (error) {
+          huboError = true;
+          break;
+        }
+      }
+
+      await cargar();
+      if (!huboError) {
+        setPagoForm({ alumnoId: "", montoMensualidad: "", montoInscripcion: "", metodo: "Efectivo", fecha: todayISO(), nota: "" });
+        showToast(pagosARegistrar.length > 1 ? "Pagos registrados (mensualidad + inscripción)." : "Pago registrado.");
       } else {
         showToast(
-          "No se pudo guardar el pago (revisa tu conexión). No se perdió lo que escribiste — dale clic de nuevo.",
+          pagosARegistrar.length > 1
+            ? "Uno de los dos pagos no se pudo guardar (revisa tu conexión). Revisa \"Últimos pagos\" para ver cuál sí quedó antes de reintentar."
+            : "No se pudo guardar el pago (revisa tu conexión). No se perdió lo que escribiste — dale clic de nuevo.",
           true
         );
       }
@@ -2285,11 +2305,11 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [alumnoModal, setAlumnoModal] = useState(null); // null | {} (nuevo) | alumno (editar)
   const [pagoForm, setPagoForm] = useState({
     alumnoId: "",
-    monto: "",
+    montoMensualidad: "",
+    montoInscripcion: "",
     metodo: "Efectivo",
     fecha: todayISO(),
     nota: "",
-    tipo: "mensualidad",
   });
   const [leadModal, setLeadModal] = useState(null);
   const [confirmConvertirLead, setConfirmConvertirLead] = useState(null);
@@ -2500,25 +2520,45 @@ function PanelAdministrativo({ perfil, onLogout }) {
     if (e && e.preventDefault) e.preventDefault();
     if (!iniciarEnvio()) return;
     try {
-      const monto = parseMonto(pagoForm.monto);
-      if (!pagoForm.alumnoId || isNaN(monto) || monto <= 0) {
-        showToast("Selecciona un alumno e ingresa un monto válido.", true);
+      const montoMensualidad = parseMonto(pagoForm.montoMensualidad);
+      const montoInscripcion = parseMonto(pagoForm.montoInscripcion);
+      const incluyeMensualidad = pagoForm.montoMensualidad !== "" && !isNaN(montoMensualidad) && montoMensualidad > 0;
+      const incluyeInscripcion = pagoForm.montoInscripcion !== "" && !isNaN(montoInscripcion) && montoInscripcion > 0;
+      if (!pagoForm.alumnoId || (!incluyeMensualidad && !incluyeInscripcion)) {
+        showToast("Selecciona un alumno e ingresa al menos un monto válido (mensualidad y/o inscripción).", true);
         return;
       }
-      const { error } = await supabase.rpc("registrar_pago", {
-        p_alumno_id: pagoForm.alumnoId,
-        p_monto: monto,
-        p_metodo: pagoForm.metodo,
-        p_fecha: pagoForm.fecha,
-        p_nota: pagoForm.nota || null,
-        p_tipo: pagoForm.tipo || "mensualidad",
-      });
-      if (!error) {
-        await cargarDatos({ silent: true });
-        setPagoForm({ alumnoId: "", monto: "", metodo: "Efectivo", fecha: todayISO(), nota: "", tipo: "mensualidad" });
-        showToast("Pago registrado.");
+      const pagosARegistrar = [];
+      if (incluyeMensualidad) pagosARegistrar.push({ monto: montoMensualidad, tipo: "mensualidad" });
+      if (incluyeInscripcion) pagosARegistrar.push({ monto: montoInscripcion, tipo: "inscripcion" });
+
+      let huboError = false;
+      for (const p of pagosARegistrar) {
+        const { error } = await supabase.rpc("registrar_pago", {
+          p_alumno_id: pagoForm.alumnoId,
+          p_monto: p.monto,
+          p_metodo: pagoForm.metodo,
+          p_fecha: pagoForm.fecha,
+          p_nota: pagoForm.nota || null,
+          p_tipo: p.tipo,
+        });
+        if (error) {
+          huboError = true;
+          break;
+        }
+      }
+
+      await cargarDatos({ silent: true });
+      if (!huboError) {
+        setPagoForm({ alumnoId: "", montoMensualidad: "", montoInscripcion: "", metodo: "Efectivo", fecha: todayISO(), nota: "" });
+        showToast(pagosARegistrar.length > 1 ? "Pagos registrados (mensualidad + inscripción)." : "Pago registrado.");
       } else {
-        showToast("No se pudo guardar el pago (revisa tu conexión). No se perdió lo que escribiste — dale clic de nuevo.", true);
+        showToast(
+          pagosARegistrar.length > 1
+            ? "Uno de los dos pagos no se pudo guardar (revisa tu conexión). Revisa \"Últimos pagos\" para ver cuál sí quedó antes de reintentar."
+            : "No se pudo guardar el pago (revisa tu conexión). No se perdió lo que escribiste — dale clic de nuevo.",
+          true
+        );
       }
     } finally {
       terminarEnvio();
@@ -3025,11 +3065,11 @@ function PanelAdmin({ perfil, onLogout }) {
   const [mesCobroSeleccionado, setMesCobroSeleccionado] = useState(monthKeyOf(todayISO()));
   const [pagoForm, setPagoForm] = useState({
     alumnoId: "",
-    monto: "",
+    montoMensualidad: "",
+    montoInscripcion: "",
     metodo: "Efectivo",
     fecha: todayISO(),
     nota: "",
-    tipo: "mensualidad",
   });
   const [gastoForm, setGastoForm] = useState({
     categoria: CATEGORIAS_GASTO[0],
@@ -3780,29 +3820,50 @@ function PanelAdmin({ perfil, onLogout }) {
     if (e && e.preventDefault) e.preventDefault();
     if (!iniciarEnvio()) return; // ya hay un guardado en curso: ignora el clic repetido
     try {
-      const monto = parseMonto(pagoForm.monto);
-      if (!pagoForm.alumnoId || isNaN(monto) || monto <= 0) {
-        showToast("Selecciona un alumno e ingresa un monto válido.", true);
+      const montoMensualidad = parseMonto(pagoForm.montoMensualidad);
+      const montoInscripcion = parseMonto(pagoForm.montoInscripcion);
+      const incluyeMensualidad = pagoForm.montoMensualidad !== "" && !isNaN(montoMensualidad) && montoMensualidad > 0;
+      const incluyeInscripcion = pagoForm.montoInscripcion !== "" && !isNaN(montoInscripcion) && montoInscripcion > 0;
+      if (!pagoForm.alumnoId || (!incluyeMensualidad && !incluyeInscripcion)) {
+        showToast("Selecciona un alumno e ingresa al menos un monto válido (mensualidad y/o inscripción).", true);
         return;
       }
-      // registrar_pago crea el pago y descuenta el saldo en una sola
-      // operación en la base de datos (ver supabase-schema.sql), así que
-      // dos clics — o dos dispositivos — nunca pueden dejarlo a medias.
-      const { error } = await supabase.rpc("registrar_pago", {
-        p_alumno_id: pagoForm.alumnoId,
-        p_monto: monto,
-        p_metodo: pagoForm.metodo,
-        p_fecha: pagoForm.fecha,
-        p_nota: pagoForm.nota || null,
-        p_tipo: pagoForm.tipo || "mensualidad",
-      });
-      if (!error) {
-        await cargarDatos({ silent: true });
-        setPagoForm({ alumnoId: "", monto: "", metodo: "Efectivo", fecha: todayISO(), nota: "", tipo: "mensualidad" });
-        showToast("Pago registrado.");
+      // Si llenó los dos montos (p. ej. un alumno nuevo que paga
+      // mensualidad + inscripción juntos), se registran como dos pagos
+      // separados — uno de cada tipo — en la misma operación. registrar_pago
+      // crea cada pago y ajusta el saldo (solo el de mensualidad lo toca) en
+      // una sola operación en la base de datos (ver supabase-schema.sql),
+      // así que dos clics — o dos dispositivos — nunca pueden dejarlo a
+      // medias.
+      const pagosARegistrar = [];
+      if (incluyeMensualidad) pagosARegistrar.push({ monto: montoMensualidad, tipo: "mensualidad" });
+      if (incluyeInscripcion) pagosARegistrar.push({ monto: montoInscripcion, tipo: "inscripcion" });
+
+      let huboError = false;
+      for (const p of pagosARegistrar) {
+        const { error } = await supabase.rpc("registrar_pago", {
+          p_alumno_id: pagoForm.alumnoId,
+          p_monto: p.monto,
+          p_metodo: pagoForm.metodo,
+          p_fecha: pagoForm.fecha,
+          p_nota: pagoForm.nota || null,
+          p_tipo: p.tipo,
+        });
+        if (error) {
+          huboError = true;
+          break;
+        }
+      }
+
+      await cargarDatos({ silent: true });
+      if (!huboError) {
+        setPagoForm({ alumnoId: "", montoMensualidad: "", montoInscripcion: "", metodo: "Efectivo", fecha: todayISO(), nota: "" });
+        showToast(pagosARegistrar.length > 1 ? "Pagos registrados (mensualidad + inscripción)." : "Pago registrado.");
       } else {
         showToast(
-          "No se pudo guardar el pago (revisa tu conexión). No se perdió lo que escribiste — dale clic de nuevo.",
+          pagosARegistrar.length > 1
+            ? "Uno de los dos pagos no se pudo guardar (revisa tu conexión). Revisa \"Últimos pagos\" para ver cuál sí quedó antes de reintentar."
+            : "No se pudo guardar el pago (revisa tu conexión). No se perdió lo que escribiste — dale clic de nuevo.",
           true
         );
       }
@@ -5337,7 +5398,6 @@ function BuscadorAlumno({ alumnos, seleccionado, onSeleccionar }) {
 function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecientes, alumnoNombre, onAnular, onEditar, enviando }) {
   const alumnoSeleccionado = alumnosActivos.find((a) => a.id === pagoForm.alumnoId) || null;
   const [meses, setMeses] = useState(1);
-  const esInscripcion = pagoForm.tipo === "inscripcion";
 
   const tarifaSeleccionado = Number(alumnoSeleccionado?.tarifaMensual || 0);
   const sugerido = tarifaSeleccionado * Math.max(1, Number(meses) || 1);
@@ -5346,21 +5406,13 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
     const n = Math.max(1, Number(meses) || 1);
     setPagoForm({
       ...pagoForm,
-      monto: String(tarifaSeleccionado * n),
+      montoMensualidad: String(tarifaSeleccionado * n),
       nota: pagoForm.nota || (n > 1 ? `Pago adelantado de ${n} meses` : ""),
     });
   }
 
-  // Al cambiar a "Inscripción" precarga el monto base (editable, para
-  // poder aplicar descuentos); al volver a "Mensualidad" lo limpia para no
-  // dejar pegado un monto que ya no aplica.
-  function cambiarTipo(nuevoTipo) {
-    const yaTeniaDefaultInscripcion = pagoForm.monto === String(MONTO_INSCRIPCION_DEFAULT);
-    if (nuevoTipo === "inscripcion") {
-      setPagoForm({ ...pagoForm, tipo: nuevoTipo, monto: pagoForm.monto || String(MONTO_INSCRIPCION_DEFAULT) });
-    } else {
-      setPagoForm({ ...pagoForm, tipo: nuevoTipo, monto: yaTeniaDefaultInscripcion ? "" : pagoForm.monto });
-    }
+  function usarMontoInscripcionBase() {
+    setPagoForm({ ...pagoForm, montoInscripcion: String(MONTO_INSCRIPCION_DEFAULT) });
   }
 
   return (
@@ -5385,24 +5437,15 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
               />
             </label>
 
-            <label>
-              Tipo de pago
-              <select value={pagoForm.tipo || "mensualidad"} onChange={(e) => cambiarTipo(e.target.value)}>
-                <option value="mensualidad">Mensualidad</option>
-                <option value="inscripcion">Inscripción</option>
-              </select>
-            </label>
-            {esInscripcion && (
-              <p className="muted" style={{ marginTop: -4 }}>
-                Cuota de inscripción (base {formatQ(MONTO_INSCRIPCION_DEFAULT)}, puedes ajustar el monto si aplica
-                un descuento). No afecta el saldo de mensualidad del alumno.
-              </p>
-            )}
+            <p className="muted" style={{ marginTop: -4, marginBottom: 2 }}>
+              Llena el monto de mensualidad, el de inscripción, o ambos si el papá los paga juntos — se
+              registran como dos pagos separados, cada uno con su efecto correcto sobre el saldo.
+            </p>
 
-            {!esInscripcion && alumnoSeleccionado && tarifaSeleccionado > 0 && (
+            {alumnoSeleccionado && tarifaSeleccionado > 0 && (
               <div className="meses-calc">
                 <label className="meses-calc-label">
-                  ¿Cuántos meses cubre este pago?
+                  ¿Cuántos meses cubre el pago de mensualidad?
                   <div className="meses-calc-row">
                     <input
                       type="number"
@@ -5427,24 +5470,38 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
 
             <div className="form-row">
               <label>
-                Monto
+                Monto mensualidad
                 <input
                   type="text"
                   inputMode="decimal"
                   placeholder="0.00"
-                  value={pagoForm.monto}
-                  onChange={(e) => setPagoForm({ ...pagoForm, monto: e.target.value })}
+                  value={pagoForm.montoMensualidad}
+                  onChange={(e) => setPagoForm({ ...pagoForm, montoMensualidad: e.target.value })}
                 />
               </label>
               <label>
-                Fecha
+                Monto inscripción
                 <input
-                  type="date"
-                  value={pagoForm.fecha}
-                  onChange={(e) => setPagoForm({ ...pagoForm, fecha: e.target.value })}
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={pagoForm.montoInscripcion}
+                  onChange={(e) => setPagoForm({ ...pagoForm, montoInscripcion: e.target.value })}
                 />
               </label>
             </div>
+            <button type="button" className="btn-secondary" onClick={usarMontoInscripcionBase} style={{ marginTop: -8 }}>
+              Usar {formatQ(MONTO_INSCRIPCION_DEFAULT)} de inscripción (base, ajustable para descuentos)
+            </button>
+
+            <label>
+              Fecha
+              <input
+                type="date"
+                value={pagoForm.fecha}
+                onChange={(e) => setPagoForm({ ...pagoForm, fecha: e.target.value })}
+              />
+            </label>
 
             <label>
               Método de pago
