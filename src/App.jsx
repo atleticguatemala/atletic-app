@@ -187,7 +187,15 @@ function calcularEdad(fechaNacimientoISO) {
 }
 
 function pagoFromDb(r) {
-  return { id: r.id, alumnoId: r.alumno_id, monto: Number(r.monto) || 0, metodo: r.metodo, fecha: r.fecha, nota: r.nota };
+  return {
+    id: r.id,
+    alumnoId: r.alumno_id,
+    monto: Number(r.monto) || 0,
+    metodo: r.metodo,
+    fecha: r.fecha,
+    nota: r.nota,
+    tipo: r.tipo || "mensualidad",
+  };
 }
 
 function gastoFromDb(r) {
@@ -981,6 +989,11 @@ const CATEGORIAS_INVENTARIO = [
 // opcional en Inventario para anotar dónde está cada artículo; un artículo
 // sin sede se entiende como de uso general/compartido entre sedes.
 const SEDES = ["Hacienda Real", "Colegio Discovery"];
+
+// Pago de inscripción: monto base sugerido (editable para aplicar
+// descuentos) de la cuota única que se cobra al matricular a un alumno,
+// separada de la mensualidad — ver "tipo" en pagos.
+const MONTO_INSCRIPCION_DEFAULT = 575;
 
 // Las 8 áreas fijas que califica la evaluación deportiva (mismo formato
 // que la infografía en papel que ya usa la academia). Título y descripción
@@ -1905,6 +1918,7 @@ function PanelAsistente({ perfil, onLogout }) {
     metodo: "Efectivo",
     fecha: todayISO(),
     nota: "",
+    tipo: "mensualidad",
   });
 
   async function cargar() {
@@ -1955,10 +1969,11 @@ function PanelAsistente({ perfil, onLogout }) {
         p_metodo: pagoForm.metodo,
         p_fecha: pagoForm.fecha,
         p_nota: pagoForm.nota || null,
+        p_tipo: pagoForm.tipo || "mensualidad",
       });
       if (!error) {
         await cargar();
-        setPagoForm({ alumnoId: "", monto: "", metodo: "Efectivo", fecha: todayISO(), nota: "" });
+        setPagoForm({ alumnoId: "", monto: "", metodo: "Efectivo", fecha: todayISO(), nota: "", tipo: "mensualidad" });
         showToast("Pago registrado.");
       } else {
         showToast(
@@ -2274,6 +2289,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
     metodo: "Efectivo",
     fecha: todayISO(),
     nota: "",
+    tipo: "mensualidad",
   });
   const [leadModal, setLeadModal] = useState(null);
   const [confirmConvertirLead, setConfirmConvertirLead] = useState(null);
@@ -2495,10 +2511,11 @@ function PanelAdministrativo({ perfil, onLogout }) {
         p_metodo: pagoForm.metodo,
         p_fecha: pagoForm.fecha,
         p_nota: pagoForm.nota || null,
+        p_tipo: pagoForm.tipo || "mensualidad",
       });
       if (!error) {
         await cargarDatos({ silent: true });
-        setPagoForm({ alumnoId: "", monto: "", metodo: "Efectivo", fecha: todayISO(), nota: "" });
+        setPagoForm({ alumnoId: "", monto: "", metodo: "Efectivo", fecha: todayISO(), nota: "", tipo: "mensualidad" });
         showToast("Pago registrado.");
       } else {
         showToast("No se pudo guardar el pago (revisa tu conexión). No se perdió lo que escribiste — dale clic de nuevo.", true);
@@ -3012,6 +3029,7 @@ function PanelAdmin({ perfil, onLogout }) {
     metodo: "Efectivo",
     fecha: todayISO(),
     nota: "",
+    tipo: "mensualidad",
   });
   const [gastoForm, setGastoForm] = useState({
     categoria: CATEGORIAS_GASTO[0],
@@ -3150,6 +3168,14 @@ function PanelAdmin({ perfil, onLogout }) {
     () =>
       pagos
         .filter((p) => monthKeyOf(p.fecha) === currentMonthKey)
+        .reduce((s, p) => s + Number(p.monto || 0), 0),
+    [pagos, currentMonthKey]
+  );
+
+  const totalInscripcionesMes = useMemo(
+    () =>
+      pagos
+        .filter((p) => monthKeyOf(p.fecha) === currentMonthKey && p.tipo === "inscripcion")
         .reduce((s, p) => s + Number(p.monto || 0), 0),
     [pagos, currentMonthKey]
   );
@@ -3768,10 +3794,11 @@ function PanelAdmin({ perfil, onLogout }) {
         p_metodo: pagoForm.metodo,
         p_fecha: pagoForm.fecha,
         p_nota: pagoForm.nota || null,
+        p_tipo: pagoForm.tipo || "mensualidad",
       });
       if (!error) {
         await cargarDatos({ silent: true });
-        setPagoForm({ alumnoId: "", monto: "", metodo: "Efectivo", fecha: todayISO(), nota: "" });
+        setPagoForm({ alumnoId: "", monto: "", metodo: "Efectivo", fecha: todayISO(), nota: "", tipo: "mensualidad" });
         showToast("Pago registrado.");
       } else {
         showToast(
@@ -3815,6 +3842,7 @@ function PanelAdmin({ perfil, onLogout }) {
         p_metodo: datos.metodo,
         p_fecha: datos.fecha,
         p_nota: datos.nota || null,
+        p_tipo: datos.tipo || "mensualidad",
       });
       if (!error) {
         await cargarDatos({ silent: true });
@@ -4054,9 +4082,16 @@ function PanelAdmin({ perfil, onLogout }) {
     filas.push([`Resumen de ${monthLabel(mesKey)}`]);
     filas.push([]);
     filas.push(["Pagos"]);
-    filas.push(["Alumno", "Monto", "Método", "Fecha", "Nota"]);
+    filas.push(["Alumno", "Tipo", "Monto", "Método", "Fecha", "Nota"]);
     pagosMes.forEach((p) => {
-      filas.push([alumnoNombre(p.alumnoId), Number(p.monto || 0).toFixed(2), p.metodo || "", p.fecha, p.nota || ""]);
+      filas.push([
+        alumnoNombre(p.alumnoId),
+        p.tipo === "inscripcion" ? "Inscripción" : "Mensualidad",
+        Number(p.monto || 0).toFixed(2),
+        p.metodo || "",
+        p.fecha,
+        p.nota || "",
+      ]);
     });
     filas.push([]);
     filas.push(["Gastos"]);
@@ -4214,6 +4249,7 @@ function PanelAdmin({ perfil, onLogout }) {
             {tab === "resumen" && (
               <ResumenView
                 totalCobradoMes={totalCobradoMes}
+                totalInscripcionesMes={totalInscripcionesMes}
                 totalPorCobrar={totalPorCobrar}
                 totalGastosMes={totalGastosMes}
                 utilidadMes={utilidadMes}
@@ -4811,6 +4847,7 @@ function ChartTooltip({ active, payload, label, formatter }) {
 
 function ResumenView({
   totalCobradoMes,
+  totalInscripcionesMes,
   totalPorCobrar,
   totalGastosMes,
   utilidadMes,
@@ -4844,6 +4881,11 @@ function ResumenView({
           <div>
             <div className="kpi-label">Cobrado en {monthLabelStr}</div>
             <div className="kpi-value">{formatQ(totalCobradoMes)}</div>
+            {totalInscripcionesMes > 0 && (
+              <div className="muted" style={{ fontSize: 12.5 }}>
+                incluye {formatQ(totalInscripcionesMes)} de inscripciones
+              </div>
+            )}
           </div>
         </div>
         <div className="kpi-card">
@@ -5295,6 +5337,7 @@ function BuscadorAlumno({ alumnos, seleccionado, onSeleccionar }) {
 function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecientes, alumnoNombre, onAnular, onEditar, enviando }) {
   const alumnoSeleccionado = alumnosActivos.find((a) => a.id === pagoForm.alumnoId) || null;
   const [meses, setMeses] = useState(1);
+  const esInscripcion = pagoForm.tipo === "inscripcion";
 
   const tarifaSeleccionado = Number(alumnoSeleccionado?.tarifaMensual || 0);
   const sugerido = tarifaSeleccionado * Math.max(1, Number(meses) || 1);
@@ -5306,6 +5349,18 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
       monto: String(tarifaSeleccionado * n),
       nota: pagoForm.nota || (n > 1 ? `Pago adelantado de ${n} meses` : ""),
     });
+  }
+
+  // Al cambiar a "Inscripción" precarga el monto base (editable, para
+  // poder aplicar descuentos); al volver a "Mensualidad" lo limpia para no
+  // dejar pegado un monto que ya no aplica.
+  function cambiarTipo(nuevoTipo) {
+    const yaTeniaDefaultInscripcion = pagoForm.monto === String(MONTO_INSCRIPCION_DEFAULT);
+    if (nuevoTipo === "inscripcion") {
+      setPagoForm({ ...pagoForm, tipo: nuevoTipo, monto: pagoForm.monto || String(MONTO_INSCRIPCION_DEFAULT) });
+    } else {
+      setPagoForm({ ...pagoForm, tipo: nuevoTipo, monto: yaTeniaDefaultInscripcion ? "" : pagoForm.monto });
+    }
   }
 
   return (
@@ -5330,7 +5385,21 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
               />
             </label>
 
-            {alumnoSeleccionado && tarifaSeleccionado > 0 && (
+            <label>
+              Tipo de pago
+              <select value={pagoForm.tipo || "mensualidad"} onChange={(e) => cambiarTipo(e.target.value)}>
+                <option value="mensualidad">Mensualidad</option>
+                <option value="inscripcion">Inscripción</option>
+              </select>
+            </label>
+            {esInscripcion && (
+              <p className="muted" style={{ marginTop: -4 }}>
+                Cuota de inscripción (base {formatQ(MONTO_INSCRIPCION_DEFAULT)}, puedes ajustar el monto si aplica
+                un descuento). No afecta el saldo de mensualidad del alumno.
+              </p>
+            )}
+
+            {!esInscripcion && alumnoSeleccionado && tarifaSeleccionado > 0 && (
               <div className="meses-calc">
                 <label className="meses-calc-label">
                   ¿Cuántos meses cubre este pago?
@@ -5417,7 +5486,10 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
             {pagosRecientes.map((p) => (
               <li key={p.id}>
                 <div className="pago-row">
-                  <span className="cell-title">{alumnoNombre(p.alumnoId)}</span>
+                  <span className="cell-title">
+                    {alumnoNombre(p.alumnoId)}
+                    {p.tipo === "inscripcion" && <span className="badge-campeonato"> Inscripción</span>}
+                  </span>
                   <span className="num pago-monto">{formatQ(p.monto)}</span>
                 </div>
                 <div className="cell-sub gasto-sub">
@@ -5939,6 +6011,16 @@ function ReporteFinancieroView({ esAdmin, alumnos, pagos, gastos, rango }) {
   const totalGastado = esAdmin ? gastosRango.reduce((s, g) => s + Number(g.monto || 0), 0) : 0;
   const margen = totalCobrado - totalGastado;
 
+  // Desglose por tipo de pago: el total "Cobrado" de arriba junta
+  // mensualidades e inscripciones (es dinero real entrando igual), pero
+  // aquí se separa para poder ver cuánto fue de cada una.
+  const totalCobradoMensualidad = pagosRango
+    .filter((p) => (p.tipo || "mensualidad") === "mensualidad")
+    .reduce((s, p) => s + Number(p.monto || 0), 0);
+  const totalCobradoInscripcion = pagosRango
+    .filter((p) => p.tipo === "inscripcion")
+    .reduce((s, p) => s + Number(p.monto || 0), 0);
+
   const meses = useMemo(() => mesesEnRango(rango.desde, rango.hasta), [rango]);
   const serieMensual = useMemo(() => {
     return meses.map((mk) => {
@@ -5982,6 +6064,8 @@ function ReporteFinancieroView({ esAdmin, alumnos, pagos, gastos, rango }) {
     filas.push([]);
     filas.push(["Totales"]);
     filas.push(["Total cobrado", totalCobrado.toFixed(2)]);
+    filas.push(["  de mensualidad", totalCobradoMensualidad.toFixed(2)]);
+    filas.push(["  de inscripción", totalCobradoInscripcion.toFixed(2)]);
     if (esAdmin) {
       filas.push(["Total gastado", totalGastado.toFixed(2)]);
       filas.push(["Margen", margen.toFixed(2)]);
@@ -6006,6 +6090,9 @@ function ReporteFinancieroView({ esAdmin, alumnos, pagos, gastos, rango }) {
           <div>
             <div className="kpi-label">Cobrado en el rango</div>
             <div className="kpi-value">{formatQ(totalCobrado)}</div>
+            <div className="muted" style={{ fontSize: 12.5 }}>
+              {formatQ(totalCobradoMensualidad)} mensualidad · {formatQ(totalCobradoInscripcion)} inscripción
+            </div>
           </div>
         </div>
         {esAdmin && (
@@ -10793,10 +10880,16 @@ function EditarPagoModal({ pago, alumnoNombre, onGuardar, onCancel, enviando }) 
   const [metodo, setMetodo] = useState(pago.metodo || METODOS_PAGO[0]);
   const [fecha, setFecha] = useState(pago.fecha);
   const [nota, setNota] = useState(pago.nota || "");
+  const [tipo, setTipo] = useState(pago.tipo || "mensualidad");
   const [error, setError] = useState(null);
 
   const montoNum = parseMonto(monto);
-  const diferencia = isNaN(montoNum) ? null : Number((montoNum - Number(pago.monto || 0)).toFixed(2));
+  // La diferencia que afecta el saldo de mensualidad solo aplica si el pago
+  // (antes y/o después de editarlo) es de tipo mensualidad — un pago de
+  // inscripción no toca el saldo, así que ahí no hay "diferencia" que avisar.
+  const contribucionAnterior = (pago.tipo || "mensualidad") === "mensualidad" ? Number(pago.monto || 0) : 0;
+  const contribucionNueva = tipo === "mensualidad" && !isNaN(montoNum) ? montoNum : 0;
+  const diferencia = isNaN(montoNum) ? null : Number((contribucionNueva - contribucionAnterior).toFixed(2));
 
   function handleSubmit(e) {
     if (e && e.preventDefault) e.preventDefault();
@@ -10809,7 +10902,7 @@ function EditarPagoModal({ pago, alumnoNombre, onGuardar, onCancel, enviando }) 
       return;
     }
     setError(null);
-    onGuardar(pago, { monto: montoNum, metodo, fecha, nota: nota.trim() });
+    onGuardar(pago, { monto: montoNum, metodo, fecha, nota: nota.trim(), tipo });
   }
 
   return (
@@ -10832,6 +10925,13 @@ function EditarPagoModal({ pago, alumnoNombre, onGuardar, onCancel, enviando }) 
             if (e.key === "Enter") handleSubmit(e);
           }}
         >
+          <label>
+            Tipo de pago
+            <select value={tipo} onChange={(e) => setTipo(e.target.value)}>
+              <option value="mensualidad">Mensualidad</option>
+              <option value="inscripcion">Inscripción</option>
+            </select>
+          </label>
           <div className="form-row">
             <label>
               Monto
@@ -10851,7 +10951,7 @@ function EditarPagoModal({ pago, alumnoNombre, onGuardar, onCancel, enviando }) 
           </div>
           {diferencia !== null && diferencia !== 0 && (
             <p className="muted" style={{ marginTop: -4 }}>
-              Esto {diferencia > 0 ? "reduce" : "aumenta"} el saldo pendiente del alumno en{" "}
+              Esto {diferencia > 0 ? "reduce" : "aumenta"} el saldo pendiente de mensualidad del alumno en{" "}
               {formatQ(Math.abs(diferencia))}.
             </p>
           )}
