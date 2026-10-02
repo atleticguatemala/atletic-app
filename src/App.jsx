@@ -110,6 +110,7 @@ function alumnoFromDb(r) {
     posicionSecundaria: r.posicion_secundaria,
     piernaDominante: r.pierna_dominante,
     fotoUrl: r.foto_url,
+    feEdadUrl: r.fe_edad_url,
     numeroUniforme: r.numero_uniforme,
     tallaUniforme: r.talla_uniforme,
     uniformeEntregado: !!r.uniforme_entregado,
@@ -138,6 +139,7 @@ function alumnoToDb(a) {
     posicion_secundaria: a.posicionSecundaria || null,
     pierna_dominante: a.piernaDominante || null,
     foto_url: a.fotoUrl || null,
+    fe_edad_url: a.feEdadUrl || null,
     numero_uniforme: a.numeroUniforme === "" || a.numeroUniforme === undefined ? null : Number(a.numeroUniforme),
     talla_uniforme: a.tallaUniforme || null,
     uniforme_entregado: !!a.uniformeEntregado,
@@ -10418,6 +10420,7 @@ function AlumnoModal({ initial, onSave, onCancel, enviando, showToast }) {
     posicionSecundaria: initial.posicionSecundaria || "",
     piernaDominante: initial.piernaDominante || "",
     fotoUrl: initial.fotoUrl || "",
+    feEdadUrl: initial.feEdadUrl || "",
     numeroUniforme: initial.numeroUniforme != null ? String(initial.numeroUniforme) : "",
     tallaUniforme: initial.tallaUniforme || "",
     uniformeEntregado: !!initial.uniformeEntregado,
@@ -10467,6 +10470,46 @@ function AlumnoModal({ initial, onSave, onCancel, enviando, showToast }) {
       setForm((prev) => ({ ...prev, fotoUrl: data?.publicUrl || "" }));
     } finally {
       setSubiendoFoto(false);
+    }
+  }
+
+  const [subiendoFeEdad, setSubiendoFeEdad] = useState(false);
+
+  // Igual que la foto, pero para el documento de fe de edad/partida de
+  // nacimiento o pasaporte. Acepta imagen o PDF (muchos papás escanean el
+  // documento como PDF en vez de tomarle foto). Se guarda en el mismo
+  // bucket público 'fotos-alumnos' (mismo patrón de permisos que la foto),
+  // con un nombre que lo distingue para no pisar el archivo de la foto.
+  async function handleFeEdadSeleccionada(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const esImagen = file.type.startsWith("image/");
+    const esPdf = file.type === "application/pdf";
+    if (!esImagen && !esPdf) {
+      showToast && showToast("Elige una imagen o un PDF.", true);
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      showToast && showToast("El archivo pesa más de 8MB. Elige uno más liviano.", true);
+      return;
+    }
+    setSubiendoFeEdad(true);
+    try {
+      const ext = (file.name.split(".").pop() || (esPdf ? "pdf" : "jpg")).toLowerCase();
+      const base = form.id || `nuevo-${Date.now()}`;
+      const ruta = `fe-edad-${base}-${Date.now()}.${ext}`;
+      const { error: errSubida } = await supabase.storage
+        .from("fotos-alumnos")
+        .upload(ruta, file, { upsert: true });
+      if (errSubida) {
+        showToast && showToast("No se pudo subir el archivo (revisa tu conexión). Inténtalo de nuevo.", true);
+        return;
+      }
+      const { data } = supabase.storage.from("fotos-alumnos").getPublicUrl(ruta);
+      setForm((prev) => ({ ...prev, feEdadUrl: data?.publicUrl || "" }));
+    } finally {
+      setSubiendoFeEdad(false);
     }
   }
 
@@ -10553,6 +10596,30 @@ function AlumnoModal({ initial, onSave, onCancel, enviando, showToast }) {
                 style={{ display: "none" }}
               />
             </label>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 8 }}>
+              {form.feEdadUrl && (
+                <a
+                  href={form.feEdadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-secondary"
+                  style={{ fontSize: 13 }}
+                >
+                  Ver fe de edad
+                </a>
+              )}
+              <label className="btn-secondary foto-alumno-btn">
+                {subiendoFeEdad ? <Loader2 size={15} className="spin" /> : <Camera size={15} />}
+                {form.feEdadUrl ? "Cambiar fe de edad" : "Subir fe de edad"}
+                <input
+                  type="file"
+                  accept="image/*,application/pdf"
+                  onChange={handleFeEdadSeleccionada}
+                  disabled={subiendoFeEdad}
+                  style={{ display: "none" }}
+                />
+              </label>
+            </div>
           </div>
           <label>
             Nombre completo
