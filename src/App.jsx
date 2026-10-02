@@ -197,7 +197,62 @@ function pagoFromDb(r) {
     fecha: r.fecha,
     nota: r.nota,
     tipo: r.tipo || "mensualidad",
+    campeonatoId: r.campeonato_id || null,
   };
+}
+
+// Objeto vacío para resetear el formulario de Registrar pago después de
+// guardar — un solo lugar para la lista de campos, para que los 3 paneles
+// (Asistente/Administrativo/Admin) nunca queden desincronizados entre sí.
+function pagoFormVacio() {
+  return {
+    alumnoId: "",
+    montoMensualidad: "",
+    montoInscripcion: "",
+    montoUniforme: "",
+    montoClasePrivada: "",
+    montoPrograma: "",
+    campeonatoIdPago: "",
+    metodo: "Efectivo",
+    fecha: todayISO(),
+    nota: "",
+  };
+}
+
+// A partir del formulario de Registrar pago, arma la lista de pagos a
+// crear (puede ser más de uno: mensualidad + inscripción + uniforme +
+// clase privada + cuota de programa, todos en el mismo registro) y valida
+// que haya al menos un monto y, si hay cuota de programa, que se haya
+// elegido a cuál. Centralizado aquí para que los 3 paneles usen
+// exactamente la misma regla.
+function construirPagosARegistrar(pagoForm) {
+  const montoMensualidad = parseMonto(pagoForm.montoMensualidad);
+  const montoInscripcion = parseMonto(pagoForm.montoInscripcion);
+  const montoUniforme = parseMonto(pagoForm.montoUniforme);
+  const montoClasePrivada = parseMonto(pagoForm.montoClasePrivada);
+  const montoPrograma = parseMonto(pagoForm.montoPrograma);
+  const incluyeMensualidad = pagoForm.montoMensualidad !== "" && !isNaN(montoMensualidad) && montoMensualidad > 0;
+  const incluyeInscripcion = pagoForm.montoInscripcion !== "" && !isNaN(montoInscripcion) && montoInscripcion > 0;
+  const incluyeUniforme = pagoForm.montoUniforme !== "" && !isNaN(montoUniforme) && montoUniforme > 0;
+  const incluyeClasePrivada = pagoForm.montoClasePrivada !== "" && !isNaN(montoClasePrivada) && montoClasePrivada > 0;
+  const tieneMontoPrograma = pagoForm.montoPrograma !== "" && !isNaN(montoPrograma) && montoPrograma > 0;
+  const incluyePrograma = tieneMontoPrograma && !!pagoForm.campeonatoIdPago;
+
+  if (!pagoForm.alumnoId || (!incluyeMensualidad && !incluyeInscripcion && !incluyeUniforme && !incluyeClasePrivada && !incluyePrograma)) {
+    return { pagosARegistrar: [], error: "Selecciona un alumno e ingresa al menos un monto válido." };
+  }
+  if (tieneMontoPrograma && !pagoForm.campeonatoIdPago) {
+    return { pagosARegistrar: [], error: "Elige a qué programa corresponde esa cuota." };
+  }
+
+  const pagosARegistrar = [];
+  if (incluyeMensualidad) pagosARegistrar.push({ monto: montoMensualidad, tipo: "mensualidad" });
+  if (incluyeInscripcion) pagosARegistrar.push({ monto: montoInscripcion, tipo: "inscripcion" });
+  if (incluyeUniforme) pagosARegistrar.push({ monto: montoUniforme, tipo: "uniforme" });
+  if (incluyeClasePrivada) pagosARegistrar.push({ monto: montoClasePrivada, tipo: "clase_privada" });
+  if (incluyePrograma) pagosARegistrar.push({ monto: montoPrograma, tipo: "programa", campeonatoId: pagoForm.campeonatoIdPago });
+
+  return { pagosARegistrar, error: null };
 }
 
 function gastoFromDb(r) {
@@ -209,7 +264,12 @@ function gastoFromDb(r) {
     nota: r.nota,
     sede: r.sede,
     entrenadorId: r.entrenador_id,
+    campeonatoId: r.campeonato_id || null,
   };
+}
+
+function moraFromDb(r) {
+  return { id: r.id, alumnoId: r.alumno_id, mes: r.mes, monto: Number(r.monto) || 0, aplicadoEn: r.aplicado_en };
 }
 
 function cargoFromDb(r) {
@@ -501,16 +561,22 @@ function campeonatoFromDb(r) {
     id: r.id,
     nombre: r.nombre,
     fecha: r.fecha,
+    fechaFin: r.fecha_fin,
     categorias: r.categorias || [],
     notas: r.notas,
+    tipo: r.tipo || "campeonato",
+    cuotaPorCategoria: r.cuota_por_categoria || {},
   };
 }
 function campeonatoToDb(c) {
   return {
     nombre: c.nombre,
     fecha: c.fecha || null,
+    fecha_fin: c.fechaFin || null,
     categorias: c.categorias && c.categorias.length ? c.categorias : null,
     notas: c.notas || null,
+    tipo: c.tipo || "campeonato",
+    cuota_por_categoria: c.cuotaPorCategoria || {},
   };
 }
 function inscripcionCampeonatoFromDb(r) {
@@ -522,8 +588,31 @@ function inscripcionCampeonatoFromDb(r) {
     pagado: !!r.pagado,
     fechaPago: r.fecha_pago,
     nota: r.nota,
+    categoria: r.categoria || null,
   };
 }
+
+// Etiquetas y colores de cada tipo de programa, usados en toda la pantalla
+// de "Programas y eventos" (filtros, badges, selects).
+const TIPOS_PROGRAMA = [
+  { value: "campeonato", label: "Campeonato" },
+  { value: "viaje", label: "Viaje" },
+  { value: "curso", label: "Curso de vacaciones" },
+  { value: "competencia", label: "Competencia" },
+  { value: "otro", label: "Otro" },
+];
+function tipoProgramaLabel(tipo) {
+  return (TIPOS_PROGRAMA.find((t) => t.value === tipo) || {}).label || "Campeonato";
+}
+
+// Etiqueta corta para el badge de cada tipo de pago en "Últimos pagos"
+// (mensualidad no lleva badge — es el caso normal). "programa" no está
+// aquí porque su etiqueta es el nombre del programa, no un texto fijo.
+const ETIQUETA_TIPO_PAGO = {
+  inscripcion: "Inscripción",
+  uniforme: "Uniforme",
+  clase_privada: "Clase privada",
+};
 // Junta cada campeonato con su lista de inscripciones (llegan por
 // separado, de la tabla campeonato_inscripciones).
 function juntarCampeonatosConInscripciones(filasCampeonatos, filasInscripciones) {
@@ -1914,14 +2003,7 @@ function PanelAsistente({ perfil, onLogout }) {
     setTimeout(() => setToast(null), 2600);
   }
 
-  const [pagoForm, setPagoForm] = useState({
-    alumnoId: "",
-    montoMensualidad: "",
-    montoInscripcion: "",
-    metodo: "Efectivo",
-    fecha: todayISO(),
-    nota: "",
-  });
+  const [pagoForm, setPagoForm] = useState(pagoFormVacio());
 
   async function cargar() {
     const [a, p, s] = await Promise.all([
@@ -1960,20 +2042,11 @@ function PanelAsistente({ perfil, onLogout }) {
     if (e && e.preventDefault) e.preventDefault();
     if (!iniciarEnvio()) return;
     try {
-      const montoMensualidad = parseMonto(pagoForm.montoMensualidad);
-      const montoInscripcion = parseMonto(pagoForm.montoInscripcion);
-      const incluyeMensualidad = pagoForm.montoMensualidad !== "" && !isNaN(montoMensualidad) && montoMensualidad > 0;
-      const incluyeInscripcion = pagoForm.montoInscripcion !== "" && !isNaN(montoInscripcion) && montoInscripcion > 0;
-      if (!pagoForm.alumnoId || (!incluyeMensualidad && !incluyeInscripcion)) {
-        showToast("Selecciona un alumno e ingresa al menos un monto válido (mensualidad y/o inscripción).", true);
+      const { pagosARegistrar, error: errorValidacion } = construirPagosARegistrar(pagoForm);
+      if (errorValidacion) {
+        showToast(errorValidacion, true);
         return;
       }
-      // Si llenó los dos montos, se registran como dos pagos separados (uno
-      // de cada tipo) en la misma operación — cada uno afecta el saldo
-      // correctamente según su tipo.
-      const pagosARegistrar = [];
-      if (incluyeMensualidad) pagosARegistrar.push({ monto: montoMensualidad, tipo: "mensualidad" });
-      if (incluyeInscripcion) pagosARegistrar.push({ monto: montoInscripcion, tipo: "inscripcion" });
 
       let huboError = false;
       for (const p of pagosARegistrar) {
@@ -1984,6 +2057,7 @@ function PanelAsistente({ perfil, onLogout }) {
           p_fecha: pagoForm.fecha,
           p_nota: pagoForm.nota || null,
           p_tipo: p.tipo,
+          p_campeonato_id: p.campeonatoId || null,
         });
         if (error) {
           huboError = true;
@@ -1993,12 +2067,12 @@ function PanelAsistente({ perfil, onLogout }) {
 
       await cargar();
       if (!huboError) {
-        setPagoForm({ alumnoId: "", montoMensualidad: "", montoInscripcion: "", metodo: "Efectivo", fecha: todayISO(), nota: "" });
-        showToast(pagosARegistrar.length > 1 ? "Pagos registrados (mensualidad + inscripción)." : "Pago registrado.");
+        setPagoForm(pagoFormVacio());
+        showToast(pagosARegistrar.length > 1 ? "Pagos registrados." : "Pago registrado.");
       } else {
         showToast(
           pagosARegistrar.length > 1
-            ? "Uno de los dos pagos no se pudo guardar (revisa tu conexión). Revisa \"Últimos pagos\" para ver cuál sí quedó antes de reintentar."
+            ? "Uno de los pagos no se pudo guardar (revisa tu conexión). Revisa \"Últimos pagos\" para ver cuáles sí quedaron antes de reintentar."
             : "No se pudo guardar el pago (revisa tu conexión). No se perdió lo que escribiste — dale clic de nuevo.",
           true
         );
@@ -2107,7 +2181,7 @@ const GRUPOS_NAV_ADMIN = [
       { key: "cobro", label: "Cobro mensual" },
       { key: "cartera", label: "Cartera" },
       { key: "margen", label: "Margen" },
-      { key: "campeonatos", label: "Campeonatos" },
+      { key: "campeonatos", label: "Programas y eventos" },
     ],
   },
   {
@@ -2162,7 +2236,7 @@ const GRUPOS_NAV_ADMINISTRATIVO = [
       { key: "pago", label: "Registrar pago" },
       { key: "cobro", label: "Cobro mensual" },
       { key: "cartera", label: "Cartera" },
-      { key: "campeonatos", label: "Campeonatos" },
+      { key: "campeonatos", label: "Programas y eventos" },
     ],
   },
   {
@@ -2267,6 +2341,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
   const [pagos, setPagos] = useState([]);
   const [leads, setLeads] = useState([]);
   const [cargos, setCargos] = useState([]);
+  const [moras, setMoras] = useState([]);
   const [asistencias, setAsistencias] = useState([]);
   const [eventos, setEventos] = useState([]);
   const [inventario, setInventario] = useState([]);
@@ -2305,20 +2380,13 @@ function PanelAdministrativo({ perfil, onLogout }) {
   }
 
   const [alumnoModal, setAlumnoModal] = useState(null); // null | {} (nuevo) | alumno (editar)
-  const [pagoForm, setPagoForm] = useState({
-    alumnoId: "",
-    montoMensualidad: "",
-    montoInscripcion: "",
-    metodo: "Efectivo",
-    fecha: todayISO(),
-    nota: "",
-  });
+  const [pagoForm, setPagoForm] = useState(pagoFormVacio());
   const [leadModal, setLeadModal] = useState(null);
   const [confirmConvertirLead, setConfirmConvertirLead] = useState(null);
   const [confirmDeleteLead, setConfirmDeleteLead] = useState(null);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, l, c, s, ev, cp, ci, inv, rp, pg, pt] = await Promise.all([
+    const [a, p, l, c, s, ev, cp, ci, inv, rp, pg, pt, mr] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("leads").select("*").order("created_at", { ascending: false }),
@@ -2334,6 +2402,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
       supabase.from("resultados_partido").select("*"),
       supabase.from("partido_goles").select("*"),
       supabase.from("partido_tarjetas").select("*"),
+      supabase.from("moras_aplicadas").select("*"),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -2344,6 +2413,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
     setCampeonatos(juntarCampeonatosConInscripciones(cp.data || [], ci.data || []));
     setInventario((inv.data || []).map(inventarioFromDb));
     setResultados(juntarResultadosConDetalle(rp.data || [], pg.data || [], pt.data || []));
+    setMoras((mr.data || []).map(moraFromDb));
     if (!silent && !a.error && !p.error && !l.error) {
       showToast(`Datos actualizados: ${(a.data || []).length} alumnos, ${(l.data || []).length} leads.`);
     }
@@ -2363,6 +2433,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "pagos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "cargos" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "moras_aplicadas" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "asistencias" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "eventos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "inventario" }, () => cargarDatos({ silent: true }))
@@ -2483,10 +2554,10 @@ function PanelAdministrativo({ perfil, onLogout }) {
     }
   }
 
-  async function inscribirAlumnoCampeonato(campeonatoId, alumnoId, montoCuota) {
+  async function inscribirAlumnoCampeonato(campeonatoId, alumnoId, montoCuota, categoria) {
     const { error } = await supabase
       .from("campeonato_inscripciones")
-      .insert([{ campeonato_id: campeonatoId, alumno_id: alumnoId, monto_cuota: montoCuota }]);
+      .insert([{ campeonato_id: campeonatoId, alumno_id: alumnoId, monto_cuota: montoCuota, categoria: categoria || null }]);
     if (error) {
       showToast("No se pudo inscribir al alumno (revisa tu conexión). Inténtalo de nuevo.", true);
       return;
@@ -2522,17 +2593,11 @@ function PanelAdministrativo({ perfil, onLogout }) {
     if (e && e.preventDefault) e.preventDefault();
     if (!iniciarEnvio()) return;
     try {
-      const montoMensualidad = parseMonto(pagoForm.montoMensualidad);
-      const montoInscripcion = parseMonto(pagoForm.montoInscripcion);
-      const incluyeMensualidad = pagoForm.montoMensualidad !== "" && !isNaN(montoMensualidad) && montoMensualidad > 0;
-      const incluyeInscripcion = pagoForm.montoInscripcion !== "" && !isNaN(montoInscripcion) && montoInscripcion > 0;
-      if (!pagoForm.alumnoId || (!incluyeMensualidad && !incluyeInscripcion)) {
-        showToast("Selecciona un alumno e ingresa al menos un monto válido (mensualidad y/o inscripción).", true);
+      const { pagosARegistrar, error: errorValidacion } = construirPagosARegistrar(pagoForm);
+      if (errorValidacion) {
+        showToast(errorValidacion, true);
         return;
       }
-      const pagosARegistrar = [];
-      if (incluyeMensualidad) pagosARegistrar.push({ monto: montoMensualidad, tipo: "mensualidad" });
-      if (incluyeInscripcion) pagosARegistrar.push({ monto: montoInscripcion, tipo: "inscripcion" });
 
       let huboError = false;
       for (const p of pagosARegistrar) {
@@ -2543,6 +2608,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
           p_fecha: pagoForm.fecha,
           p_nota: pagoForm.nota || null,
           p_tipo: p.tipo,
+          p_campeonato_id: p.campeonatoId || null,
         });
         if (error) {
           huboError = true;
@@ -2552,12 +2618,12 @@ function PanelAdministrativo({ perfil, onLogout }) {
 
       await cargarDatos({ silent: true });
       if (!huboError) {
-        setPagoForm({ alumnoId: "", montoMensualidad: "", montoInscripcion: "", metodo: "Efectivo", fecha: todayISO(), nota: "" });
-        showToast(pagosARegistrar.length > 1 ? "Pagos registrados (mensualidad + inscripción)." : "Pago registrado.");
+        setPagoForm(pagoFormVacio());
+        showToast(pagosARegistrar.length > 1 ? "Pagos registrados." : "Pago registrado.");
       } else {
         showToast(
           pagosARegistrar.length > 1
-            ? "Uno de los dos pagos no se pudo guardar (revisa tu conexión). Revisa \"Últimos pagos\" para ver cuál sí quedó antes de reintentar."
+            ? "Uno de los pagos no se pudo guardar (revisa tu conexión). Revisa \"Últimos pagos\" para ver cuáles sí quedaron antes de reintentar."
             : "No se pudo guardar el pago (revisa tu conexión). No se perdió lo que escribiste — dale clic de nuevo.",
           true
         );
@@ -2585,6 +2651,37 @@ function PanelAdministrativo({ perfil, onLogout }) {
         showToast(`Cobro de ${monthLabel(mesCobroSeleccionado)} generado para ${afectados.length} alumno(s).`);
       } else {
         showToast("No se pudo generar el cobro (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
+  // Aplica el mismo monto de mora a varios alumnos de una sola vez. El
+  // "unique (alumno_id, mes)" de moras_aplicadas (ver supabase-schema.sql)
+  // es lo que evita cobrarle mora dos veces el mismo mes por accidente —
+  // así que si alguien que ya la tenía queda seleccionado otra vez, no pasa
+  // nada raro, simplemente se salta.
+  async function aplicarMoras(alumnoIds, monto) {
+    if (!alumnoIds || alumnoIds.length === 0) return;
+    if (!iniciarEnvio()) return;
+    try {
+      const { data, error } = await supabase.rpc("aplicar_moras", {
+        p_alumno_ids: alumnoIds,
+        p_monto: monto,
+        p_mes: mesCobroSeleccionado,
+      });
+      if (!error) {
+        await cargarDatos({ silent: true });
+        const aplicadas = (data || []).length;
+        showToast(
+          aplicadas === 0
+            ? "No se aplicó ninguna mora nueva (ya se les había aplicado este mes)."
+            : `Mora aplicada a ${aplicadas} alumno(s).`,
+          aplicadas === 0
+        );
+      } else {
+        showToast("No se pudo aplicar la mora (revisa tu conexión). Inténtalo de nuevo.", true);
       }
     } finally {
       terminarEnvio();
@@ -2783,6 +2880,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
                 onAnular={noAutorizado}
                 onEditar={noAutorizado}
                 enviando={enviando}
+                campeonatos={campeonatos}
               />
             )}
 
@@ -2795,6 +2893,10 @@ function PanelAdministrativo({ perfil, onLogout }) {
                 pendientesGenerar={pendientesGenerar}
                 cargos={cargos}
                 onGenerar={() => setConfirmCargo(true)}
+                alumnosMensuales={alumnosMensuales}
+                moras={moras}
+                onAplicarMoras={aplicarMoras}
+                enviando={enviando}
               />
             )}
 
@@ -2992,6 +3094,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [alumnos, setAlumnos] = useState([]);
   const [pagos, setPagos] = useState([]);
   const [cargos, setCargos] = useState([]);
+  const [moras, setMoras] = useState([]);
   const [gastos, setGastos] = useState([]);
   const [ajustes, setAjustes] = useState([]);
   const [asistencias, setAsistencias] = useState([]);
@@ -3065,14 +3168,7 @@ function PanelAdmin({ perfil, onLogout }) {
   // de hoy, pero se puede adelantar a cualquier mes que quede del año — así
   // no hay que esperar a que llegue la fecha para generarlo.
   const [mesCobroSeleccionado, setMesCobroSeleccionado] = useState(monthKeyOf(todayISO()));
-  const [pagoForm, setPagoForm] = useState({
-    alumnoId: "",
-    montoMensualidad: "",
-    montoInscripcion: "",
-    metodo: "Efectivo",
-    fecha: todayISO(),
-    nota: "",
-  });
+  const [pagoForm, setPagoForm] = useState(pagoFormVacio());
   const [gastoForm, setGastoForm] = useState({
     categoria: CATEGORIAS_GASTO[0],
     monto: "",
@@ -3080,6 +3176,7 @@ function PanelAdmin({ perfil, onLogout }) {
     nota: "",
     sede: "",
     entrenadorId: "",
+    campeonatoId: "",
   });
   const [confirmDeleteGasto, setConfirmDeleteGasto] = useState(null);
   const [confirmDeletePago, setConfirmDeletePago] = useState(null);
@@ -3089,7 +3186,7 @@ function PanelAdmin({ perfil, onLogout }) {
   const [reloading, setReloading] = useState(false);
 
   async function cargarDatos({ silent } = {}) {
-    const [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv, eva, hs] = await Promise.all([
+    const [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv, eva, hs, mr] = await Promise.all([
       supabase.from("alumnos").select("*").order("nombre"),
       supabase.from("pagos").select("*").order("created_at", { ascending: false }),
       supabase.from("cargos").select("*").order("created_at", { ascending: false }),
@@ -3110,6 +3207,7 @@ function PanelAdmin({ perfil, onLogout }) {
       supabase.from("inventario").select("*").order("nombre"),
       supabase.from("evaluaciones").select("*").order("fecha", { ascending: false }),
       supabase.from("entrenador_horas_sede").select("*"),
+      supabase.from("moras_aplicadas").select("*"),
     ]);
     setAlumnos((a.data || []).map(alumnoFromDb));
     setPagos((p.data || []).map(pagoFromDb));
@@ -3127,8 +3225,9 @@ function PanelAdmin({ perfil, onLogout }) {
     setInventario((inv.data || []).map(inventarioFromDb));
     setEvaluaciones((eva.data || []).map(evaluacionFromDb));
     setHorasSedeEntrenadores(hs.data || []);
+    setMoras((mr.data || []).map(moraFromDb));
 
-    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv, eva, hs].some((r) => r.error);
+    const algunFallo = [a, p, c, g, j, s, l, ev, st, ej, se, sej, rp, pg, pt, cp, ci, inv, eva, hs, mr].some((r) => r.error);
     if (algunFallo) {
       showToast(
         "No se pudo cargar toda tu información (revisa tu conexión). Dale a \"Recargar\" para intentar de nuevo.",
@@ -3149,6 +3248,7 @@ function PanelAdmin({ perfil, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "pagos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "gastos" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "cargos" }, () => cargarDatos({ silent: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "moras_aplicadas" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "ajustes" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "asistencias" }, () => cargarDatos({ silent: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => cargarDatos({ silent: true }))
@@ -3783,10 +3883,10 @@ function PanelAdmin({ perfil, onLogout }) {
     }
   }
 
-  async function inscribirAlumnoCampeonato(campeonatoId, alumnoId, montoCuota) {
+  async function inscribirAlumnoCampeonato(campeonatoId, alumnoId, montoCuota, categoria) {
     const { error } = await supabase
       .from("campeonato_inscripciones")
-      .insert([{ campeonato_id: campeonatoId, alumno_id: alumnoId, monto_cuota: montoCuota }]);
+      .insert([{ campeonato_id: campeonatoId, alumno_id: alumnoId, monto_cuota: montoCuota, categoria: categoria || null }]);
     if (error) {
       showToast("No se pudo inscribir al alumno (revisa tu conexión). Inténtalo de nuevo.", true);
       return;
@@ -3822,24 +3922,11 @@ function PanelAdmin({ perfil, onLogout }) {
     if (e && e.preventDefault) e.preventDefault();
     if (!iniciarEnvio()) return; // ya hay un guardado en curso: ignora el clic repetido
     try {
-      const montoMensualidad = parseMonto(pagoForm.montoMensualidad);
-      const montoInscripcion = parseMonto(pagoForm.montoInscripcion);
-      const incluyeMensualidad = pagoForm.montoMensualidad !== "" && !isNaN(montoMensualidad) && montoMensualidad > 0;
-      const incluyeInscripcion = pagoForm.montoInscripcion !== "" && !isNaN(montoInscripcion) && montoInscripcion > 0;
-      if (!pagoForm.alumnoId || (!incluyeMensualidad && !incluyeInscripcion)) {
-        showToast("Selecciona un alumno e ingresa al menos un monto válido (mensualidad y/o inscripción).", true);
+      const { pagosARegistrar, error: errorValidacion } = construirPagosARegistrar(pagoForm);
+      if (errorValidacion) {
+        showToast(errorValidacion, true);
         return;
       }
-      // Si llenó los dos montos (p. ej. un alumno nuevo que paga
-      // mensualidad + inscripción juntos), se registran como dos pagos
-      // separados — uno de cada tipo — en la misma operación. registrar_pago
-      // crea cada pago y ajusta el saldo (solo el de mensualidad lo toca) en
-      // una sola operación en la base de datos (ver supabase-schema.sql),
-      // así que dos clics — o dos dispositivos — nunca pueden dejarlo a
-      // medias.
-      const pagosARegistrar = [];
-      if (incluyeMensualidad) pagosARegistrar.push({ monto: montoMensualidad, tipo: "mensualidad" });
-      if (incluyeInscripcion) pagosARegistrar.push({ monto: montoInscripcion, tipo: "inscripcion" });
 
       let huboError = false;
       for (const p of pagosARegistrar) {
@@ -3850,6 +3937,7 @@ function PanelAdmin({ perfil, onLogout }) {
           p_fecha: pagoForm.fecha,
           p_nota: pagoForm.nota || null,
           p_tipo: p.tipo,
+          p_campeonato_id: p.campeonatoId || null,
         });
         if (error) {
           huboError = true;
@@ -3859,12 +3947,12 @@ function PanelAdmin({ perfil, onLogout }) {
 
       await cargarDatos({ silent: true });
       if (!huboError) {
-        setPagoForm({ alumnoId: "", montoMensualidad: "", montoInscripcion: "", metodo: "Efectivo", fecha: todayISO(), nota: "" });
-        showToast(pagosARegistrar.length > 1 ? "Pagos registrados (mensualidad + inscripción)." : "Pago registrado.");
+        setPagoForm(pagoFormVacio());
+        showToast(pagosARegistrar.length > 1 ? "Pagos registrados." : "Pago registrado.");
       } else {
         showToast(
           pagosARegistrar.length > 1
-            ? "Uno de los dos pagos no se pudo guardar (revisa tu conexión). Revisa \"Últimos pagos\" para ver cuál sí quedó antes de reintentar."
+            ? "Uno de los pagos no se pudo guardar (revisa tu conexión). Revisa \"Últimos pagos\" para ver cuáles sí quedaron antes de reintentar."
             : "No se pudo guardar el pago (revisa tu conexión). No se perdió lo que escribiste — dale clic de nuevo.",
           true
         );
@@ -3906,6 +3994,7 @@ function PanelAdmin({ perfil, onLogout }) {
         p_fecha: datos.fecha,
         p_nota: datos.nota || null,
         p_tipo: datos.tipo || "mensualidad",
+        p_campeonato_id: datos.campeonatoId || null,
       });
       if (!error) {
         await cargarDatos({ silent: true });
@@ -4066,10 +4155,11 @@ function PanelAdmin({ perfil, onLogout }) {
         nota: gastoForm.nota || null,
         sede: !esPagoEntrenador && gastoForm.sede ? gastoForm.sede : null,
         entrenador_id: esPagoEntrenador && gastoForm.entrenadorId ? gastoForm.entrenadorId : null,
+        campeonato_id: gastoForm.campeonatoId || null,
       });
       if (!error) {
         await cargarDatos({ silent: true });
-        setGastoForm({ categoria: gastoForm.categoria, monto: "", fecha: todayISO(), nota: "", sede: "", entrenadorId: "" });
+        setGastoForm({ categoria: gastoForm.categoria, monto: "", fecha: todayISO(), nota: "", sede: "", entrenadorId: "", campeonatoId: "" });
         showToast("Gasto registrado.");
       } else {
         showToast("No se pudo guardar el gasto (revisa tu conexión). Vuelve a intentarlo.", true);
@@ -4127,6 +4217,37 @@ function PanelAdmin({ perfil, onLogout }) {
     }
   }
 
+  // Aplica el mismo monto de mora a varios alumnos de una sola vez. El
+  // "unique (alumno_id, mes)" de moras_aplicadas (ver supabase-schema.sql)
+  // es lo que evita cobrarle mora dos veces el mismo mes por accidente —
+  // así que si alguien que ya la tenía queda seleccionado otra vez, no pasa
+  // nada raro, simplemente se salta.
+  async function aplicarMoras(alumnoIds, monto) {
+    if (!alumnoIds || alumnoIds.length === 0) return;
+    if (!iniciarEnvio()) return;
+    try {
+      const { data, error } = await supabase.rpc("aplicar_moras", {
+        p_alumno_ids: alumnoIds,
+        p_monto: monto,
+        p_mes: mesCobroSeleccionado,
+      });
+      if (!error) {
+        await cargarDatos({ silent: true });
+        const aplicadas = (data || []).length;
+        showToast(
+          aplicadas === 0
+            ? "No se aplicó ninguna mora nueva (ya se les había aplicado este mes)."
+            : `Mora aplicada a ${aplicadas} alumno(s).`,
+          aplicadas === 0
+        );
+      } else {
+        showToast("No se pudo aplicar la mora (revisa tu conexión). Inténtalo de nuevo.", true);
+      }
+    } finally {
+      terminarEnvio();
+    }
+  }
+
   // Exporta a un .csv (se abre directo en Excel) los pagos y gastos del
   // mes en curso más los totales, todo armado en el navegador — no hace
   // falta ninguna llamada al servidor ni librería nueva.
@@ -4149,7 +4270,9 @@ function PanelAdmin({ perfil, onLogout }) {
     pagosMes.forEach((p) => {
       filas.push([
         alumnoNombre(p.alumnoId),
-        p.tipo === "inscripcion" ? "Inscripción" : "Mensualidad",
+        p.tipo === "programa"
+          ? "Programa: " + (campeonatos.find((c) => c.id === p.campeonatoId)?.nombre || "(eliminado)")
+          : ETIQUETA_TIPO_PAGO[p.tipo] || "Mensualidad",
         Number(p.monto || 0).toFixed(2),
         p.metodo || "",
         p.fecha,
@@ -4354,6 +4477,7 @@ function PanelAdmin({ perfil, onLogout }) {
                 onAnular={(p) => setConfirmDeletePago(p)}
                 onEditar={(p) => setEditarPagoModal(p)}
                 enviando={enviando}
+                campeonatos={campeonatos}
               />
             )}
 
@@ -4368,6 +4492,7 @@ function PanelAdmin({ perfil, onLogout }) {
                 monthLabelStr={monthLabel(currentMonthKey)}
                 enviando={enviando}
                 staff={staff}
+                campeonatos={campeonatos}
               />
             )}
 
@@ -4380,6 +4505,10 @@ function PanelAdmin({ perfil, onLogout }) {
                 pendientesGenerar={pendientesGenerar}
                 cargos={cargos}
                 onGenerar={() => setConfirmCargo(true)}
+                alumnosMensuales={alumnosMensuales}
+                moras={moras}
+                onAplicarMoras={aplicarMoras}
+                enviando={enviando}
               />
             )}
 
@@ -4771,6 +4900,7 @@ function PanelAdmin({ perfil, onLogout }) {
           onGuardar={guardarEdicionPago}
           onCancel={() => setEditarPagoModal(null)}
           enviando={enviando}
+          campeonatos={campeonatos}
         />
       )}
 
@@ -5397,7 +5527,7 @@ function BuscadorAlumno({ alumnos, seleccionado, onSeleccionar }) {
   );
 }
 
-function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecientes, alumnoNombre, onAnular, onEditar, enviando }) {
+function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecientes, alumnoNombre, onAnular, onEditar, enviando, campeonatos }) {
   const alumnoSeleccionado = alumnosActivos.find((a) => a.id === pagoForm.alumnoId) || null;
   const [meses, setMeses] = useState(1);
 
@@ -5415,6 +5545,17 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
 
   function usarMontoInscripcionBase() {
     setPagoForm({ ...pagoForm, montoInscripcion: String(MONTO_INSCRIPCION_DEFAULT) });
+  }
+
+  const programasDisponibles = campeonatos || [];
+  const programaSeleccionado = programasDisponibles.find((c) => c.id === pagoForm.campeonatoIdPago) || null;
+  const cuotaSugeridaPrograma =
+    programaSeleccionado && alumnoSeleccionado
+      ? Number(programaSeleccionado.cuotaPorCategoria?.[alumnoSeleccionado.categoria] || 0)
+      : 0;
+
+  function usarCuotaSugeridaPrograma() {
+    setPagoForm({ ...pagoForm, montoPrograma: String(cuotaSugeridaPrograma) });
   }
 
   return (
@@ -5440,8 +5581,9 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
             </label>
 
             <p className="muted" style={{ marginTop: -4, marginBottom: 2 }}>
-              Llena el monto de mensualidad, el de inscripción, o ambos si el papá los paga juntos — se
-              registran como dos pagos separados, cada uno con su efecto correcto sobre el saldo.
+              Llena el monto de cada concepto que el papá esté pagando — puedes combinar varios en el
+              mismo registro (ej. mensualidad + inscripción de un alumno nuevo). Cada uno se guarda por
+              separado con su efecto correcto sobre el saldo.
             </p>
 
             {alumnoSeleccionado && tarifaSeleccionado > 0 && (
@@ -5496,6 +5638,67 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
               Usar {formatQ(MONTO_INSCRIPCION_DEFAULT)} de inscripción (base, ajustable para descuentos)
             </button>
 
+            <div className="form-row">
+              <label>
+                Monto uniforme
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={pagoForm.montoUniforme}
+                  onChange={(e) => setPagoForm({ ...pagoForm, montoUniforme: e.target.value })}
+                />
+              </label>
+              <label>
+                Monto clase privada
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={pagoForm.montoClasePrivada}
+                  onChange={(e) => setPagoForm({ ...pagoForm, montoClasePrivada: e.target.value })}
+                />
+              </label>
+            </div>
+
+            {programasDisponibles.length > 0 && (
+              <>
+                <label>
+                  Cuota de programa (campeonato, viaje, curso…)
+                  <select
+                    value={pagoForm.campeonatoIdPago}
+                    onChange={(e) => setPagoForm({ ...pagoForm, campeonatoIdPago: e.target.value })}
+                  >
+                    <option value="">Ninguno</option>
+                    {programasDisponibles.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {tipoProgramaLabel(c.tipo)} · {c.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {pagoForm.campeonatoIdPago && (
+                  <div className="form-row">
+                    <label>
+                      Monto de la cuota
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        value={pagoForm.montoPrograma}
+                        onChange={(e) => setPagoForm({ ...pagoForm, montoPrograma: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                )}
+                {pagoForm.campeonatoIdPago && cuotaSugeridaPrograma > 0 && (
+                  <button type="button" className="btn-secondary" onClick={usarCuotaSugeridaPrograma} style={{ marginTop: -8 }}>
+                    Usar {formatQ(cuotaSugeridaPrograma)} (cuota sugerida para {alumnoSeleccionado?.categoria})
+                  </button>
+                )}
+              </>
+            )}
+
             <label>
               Fecha
               <input
@@ -5547,7 +5750,14 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
                 <div className="pago-row">
                   <span className="cell-title">
                     {alumnoNombre(p.alumnoId)}
-                    {p.tipo === "inscripcion" && <span className="badge-campeonato"> Inscripción</span>}
+                    {p.tipo && p.tipo !== "mensualidad" && (
+                      <span className={"badge-tipo-pago badge-tipo-" + p.tipo}>
+                        {" "}
+                        {p.tipo === "programa"
+                          ? (programasDisponibles.find((c) => c.id === p.campeonatoId)?.nombre || "Programa")
+                          : ETIQUETA_TIPO_PAGO[p.tipo] || p.tipo}
+                      </span>
+                    )}
                   </span>
                   <span className="num pago-monto">{formatQ(p.monto)}</span>
                 </div>
@@ -5586,6 +5796,7 @@ function GastoView({
   monthLabelStr,
   enviando,
   staff,
+  campeonatos,
 }) {
   const esPagoEntrenador = gastoForm.categoria === "Pago a entrenador";
   const entrenadoresActivos = (staff || []).filter((p) => p.rol === "entrenador" && p.activo !== false);
@@ -5667,6 +5878,21 @@ function GastoView({
           )}
 
           <label>
+            Programa (opcional — para que cuente en el margen de un viaje/campeonato)
+            <select
+              value={gastoForm.campeonatoId}
+              onChange={(e) => setGastoForm({ ...gastoForm, campeonatoId: e.target.value })}
+            >
+              <option value="">Gasto general (no es de ningún programa)</option>
+              {(campeonatos || []).map((c) => (
+                <option key={c.id} value={c.id}>
+                  {tipoProgramaLabel(c.tipo)} · {c.nombre}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
             Nota (opcional)
             <input
               type="text"
@@ -5725,9 +5951,48 @@ function CobroView({
   pendientesGenerar,
   cargos,
   onGenerar,
+  alumnosMensuales,
+  moras,
+  onAplicarMoras,
+  enviando,
 }) {
   const total = pendientesGenerar.reduce((s, a) => s + Number(a.tarifaMensual || 0), 0);
   const hoyKey = monthKeyOf(todayISO());
+
+  // Candidatos a mora: alumnos mensuales activos que todavía deben algo y
+  // que no se les haya aplicado mora ya este mes (eso lo evita de todos
+  // modos el "unique" en la base de datos, pero así no aparecen
+  // pre-marcados para evitar confusión).
+  const idsConMoraEsteMes = new Set((moras || []).filter((m) => m.mes === mesSeleccionado).map((m) => m.alumnoId));
+  const candidatosMora = (alumnosMensuales || []).filter(
+    (a) => a.activo !== false && Number(a.saldoPendiente || 0) > 0 && !idsConMoraEsteMes.has(a.id)
+  );
+
+  const [montoMora, setMontoMora] = useState("50");
+  const [excluidosMora, setExcluidosMora] = useState(() => new Set());
+
+  const seleccionadosMora = candidatosMora.filter((a) => !excluidosMora.has(a.id));
+  const montoMoraNum = parseMonto(montoMora);
+  const totalMora = (!isNaN(montoMoraNum) ? montoMoraNum : 0) * seleccionadosMora.length;
+
+  function toggleExcluido(id) {
+    setExcluidosMora((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function handleAplicarMoras() {
+    if (seleccionadosMora.length === 0 || isNaN(montoMoraNum) || montoMoraNum <= 0) return;
+    onAplicarMoras(
+      seleccionadosMora.map((a) => a.id),
+      montoMoraNum
+    );
+    setExcluidosMora(new Set());
+  }
+
   return (
     <div className="stack">
       <div className="panel highlight">
@@ -5767,6 +6032,73 @@ function CobroView({
           </div>
         )}
       </div>
+
+      {onAplicarMoras && (
+        <div className="panel" style={{ borderStyle: "dashed" }}>
+          <div className="cobro-head">
+            <div>
+              <h2>
+                Moras — {monthLabelStr}
+                <span className="badge-tipo-pago badge-tipo-programa" style={{ marginLeft: 8 }}>
+                  Nuevo
+                </span>
+              </h2>
+              <p className="muted">
+                Aplica el mismo recargo a los alumnos mensuales activos que todavía tienen saldo
+                pendiente de {monthLabelStr}. Desmarca a quien no corresponda antes de aplicar — a
+                quien ya se le aplicó este mes no vuelve a aparecer aquí.
+              </p>
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 10 }}>
+              <label style={{ margin: 0 }}>
+                Monto
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  style={{ width: 90 }}
+                  value={montoMora}
+                  onChange={(e) => setMontoMora(e.target.value)}
+                />
+              </label>
+              <button
+                className="btn-primary"
+                onClick={handleAplicarMoras}
+                disabled={enviando || seleccionadosMora.length === 0 || isNaN(montoMoraNum) || montoMoraNum <= 0}
+              >
+                Aplicar mora a {seleccionadosMora.length} alumno(s) — {formatQ(totalMora)}
+              </button>
+            </div>
+          </div>
+          {candidatosMora.length === 0 ? (
+            <div className="empty small">
+              No hay alumnos con saldo pendiente este mes (o ya se les aplicó la mora a todos).
+            </div>
+          ) : (
+            <div className="table-scroll" style={{ marginTop: 10 }}>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th>Alumno</th>
+                    <th className="num">Saldo pendiente</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {candidatosMora.map((a) => (
+                    <tr key={a.id} style={excluidosMora.has(a.id) ? { opacity: 0.5 } : undefined}>
+                      <td>
+                        <input type="checkbox" checked={!excluidosMora.has(a.id)} onChange={() => toggleExcluido(a.id)} />
+                      </td>
+                      <td className="cell-title">{a.nombre}</td>
+                      <td className="num">{formatQ(a.saldoPendiente)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="panel">
         <h2>Historial de cobros generados</h2>
@@ -5982,7 +6314,7 @@ function CentroReportesView({
     { key: "financiero", label: "Financiero" },
     { key: "deportivo", label: "Deportivo" },
     { key: "asistencia", label: "Asistencia" },
-    { key: "campeonatos", label: "Campeonatos e inventario" },
+    { key: "campeonatos", label: "Programas e inventario" },
     ...(esAdmin ? [{ key: "sede", label: "Rentabilidad por sede" }] : []),
   ];
 
@@ -6036,7 +6368,7 @@ function CentroReportesView({
         />
       )}
       {subTab === "campeonatos" && (
-        <ReporteCampeonatosInventarioView campeonatos={campeonatos} inventario={inventario} />
+        <ReporteCampeonatosInventarioView campeonatos={campeonatos} inventario={inventario} gastos={gastos} />
       )}
       {esAdmin && subTab === "sede" && (
         <ReportePorSedeView
@@ -6070,15 +6402,29 @@ function ReporteFinancieroView({ esAdmin, alumnos, pagos, gastos, rango }) {
   const totalGastado = esAdmin ? gastosRango.reduce((s, g) => s + Number(g.monto || 0), 0) : 0;
   const margen = totalCobrado - totalGastado;
 
-  // Desglose por tipo de pago: el total "Cobrado" de arriba junta
-  // mensualidades e inscripciones (es dinero real entrando igual), pero
-  // aquí se separa para poder ver cuánto fue de cada una.
-  const totalCobradoMensualidad = pagosRango
-    .filter((p) => (p.tipo || "mensualidad") === "mensualidad")
-    .reduce((s, p) => s + Number(p.monto || 0), 0);
-  const totalCobradoInscripcion = pagosRango
-    .filter((p) => p.tipo === "inscripcion")
-    .reduce((s, p) => s + Number(p.monto || 0), 0);
+  // Desglose por tipo de pago: el total "Cobrado" de arriba junta todos los
+  // conceptos (es dinero real entrando igual), pero aquí se separa para ver
+  // cuánto fue de cada uno. "programa" junta todas las cuotas de
+  // campeonatos/viajes/cursos/competencias — su propio desglose por
+  // programa vive en el reporte de Programas y eventos.
+  const cobradoPorTipo = useMemo(() => {
+    const m = {};
+    pagosRango.forEach((p) => {
+      const t = p.tipo || "mensualidad";
+      m[t] = (m[t] || 0) + Number(p.monto || 0);
+    });
+    return m;
+  }, [pagosRango]);
+  const ETIQUETA_TIPO_REPORTE = {
+    mensualidad: "mensualidad",
+    inscripcion: "inscripción",
+    uniforme: "uniforme",
+    clase_privada: "clase privada",
+    programa: "cuotas de programas",
+  };
+  const desgloseTipos = Object.keys(ETIQUETA_TIPO_REPORTE)
+    .filter((t) => cobradoPorTipo[t] > 0)
+    .map((t) => ({ tipo: t, etiqueta: ETIQUETA_TIPO_REPORTE[t], monto: cobradoPorTipo[t] }));
 
   const meses = useMemo(() => mesesEnRango(rango.desde, rango.hasta), [rango]);
   const serieMensual = useMemo(() => {
@@ -6123,8 +6469,7 @@ function ReporteFinancieroView({ esAdmin, alumnos, pagos, gastos, rango }) {
     filas.push([]);
     filas.push(["Totales"]);
     filas.push(["Total cobrado", totalCobrado.toFixed(2)]);
-    filas.push(["  de mensualidad", totalCobradoMensualidad.toFixed(2)]);
-    filas.push(["  de inscripción", totalCobradoInscripcion.toFixed(2)]);
+    desgloseTipos.forEach((d) => filas.push([`  de ${d.etiqueta}`, d.monto.toFixed(2)]));
     if (esAdmin) {
       filas.push(["Total gastado", totalGastado.toFixed(2)]);
       filas.push(["Margen", margen.toFixed(2)]);
@@ -6150,7 +6495,7 @@ function ReporteFinancieroView({ esAdmin, alumnos, pagos, gastos, rango }) {
             <div className="kpi-label">Cobrado en el rango</div>
             <div className="kpi-value">{formatQ(totalCobrado)}</div>
             <div className="muted" style={{ fontSize: 12.5 }}>
-              {formatQ(totalCobradoMensualidad)} mensualidad · {formatQ(totalCobradoInscripcion)} inscripción
+              {desgloseTipos.map((d) => `${formatQ(d.monto)} ${d.etiqueta}`).join(" · ")}
             </div>
           </div>
         </div>
@@ -6663,17 +7008,29 @@ function ReporteAsistenciaView({ esAdmin, alumnos, asistencias, staffNombre, ran
 // Reporte de campeonatos (cuotas cobradas/pendientes) e inventario (estado
 // por categoría). No depende de un rango de fechas — es una foto del
 // estado actual de cada campeonato registrado y del inventario de hoy.
-function ReporteCampeonatosInventarioView({ campeonatos, inventario }) {
+function ReporteCampeonatosInventarioView({ campeonatos, inventario, gastos }) {
   const campeonatosResumen = useMemo(() => {
     return campeonatos
       .map((c) => {
         const inscritos = c.inscripciones.length;
         const totalCuota = c.inscripciones.reduce((s, i) => s + Number(i.montoCuota || 0), 0);
         const cobrado = c.inscripciones.filter((i) => i.pagado).reduce((s, i) => s + Number(i.montoCuota || 0), 0);
-        return { id: c.id, nombre: c.nombre, fecha: c.fecha, inscritos, totalCuota, cobrado, pendiente: totalCuota - cobrado };
+        const gastado = (gastos || []).filter((g) => g.campeonatoId === c.id).reduce((s, g) => s + Number(g.monto || 0), 0);
+        return {
+          id: c.id,
+          nombre: c.nombre,
+          tipo: c.tipo || "campeonato",
+          fecha: c.fecha,
+          inscritos,
+          totalCuota,
+          cobrado,
+          pendiente: totalCuota - cobrado,
+          gastado,
+          margen: cobrado - gastado,
+        };
       })
       .sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
-  }, [campeonatos]);
+  }, [campeonatos, gastos]);
 
   const inventarioPorCategoria = useMemo(() => {
     const m = {};
@@ -6693,16 +7050,28 @@ function ReporteCampeonatosInventarioView({ campeonatos, inventario }) {
       totalCuota: acc.totalCuota + c.totalCuota,
       cobrado: acc.cobrado + c.cobrado,
       pendiente: acc.pendiente + c.pendiente,
+      gastado: acc.gastado + c.gastado,
+      margen: acc.margen + c.margen,
     }),
-    { inscritos: 0, totalCuota: 0, cobrado: 0, pendiente: 0 }
+    { inscritos: 0, totalCuota: 0, cobrado: 0, pendiente: 0, gastado: 0, margen: 0 }
   );
 
   function exportar() {
     const filas = [];
-    filas.push(["Campeonatos"]);
-    filas.push(["Nombre", "Fecha", "Inscritos", "Cuota total", "Cobrado", "Pendiente"]);
+    filas.push(["Programas y eventos"]);
+    filas.push(["Nombre", "Tipo", "Fecha", "Inscritos", "Cuota total", "Cobrado", "Pendiente", "Gastado", "Margen"]);
     campeonatosResumen.forEach((c) =>
-      filas.push([c.nombre, c.fecha || "", c.inscritos, c.totalCuota.toFixed(2), c.cobrado.toFixed(2), c.pendiente.toFixed(2)])
+      filas.push([
+        c.nombre,
+        tipoProgramaLabel(c.tipo),
+        c.fecha || "",
+        c.inscritos,
+        c.totalCuota.toFixed(2),
+        c.cobrado.toFixed(2),
+        c.pendiente.toFixed(2),
+        c.gastado.toFixed(2),
+        c.margen.toFixed(2),
+      ])
     );
     filas.push([]);
     filas.push(["Inventario por categoría"]);
@@ -6725,7 +7094,7 @@ function ReporteCampeonatosInventarioView({ campeonatos, inventario }) {
             <Users size={18} />
           </div>
           <div>
-            <div className="kpi-label">Inscripciones a campeonatos</div>
+            <div className="kpi-label">Inscripciones a programas</div>
             <div className="kpi-value">{totalesCampeonatos.inscritos}</div>
           </div>
         </div>
@@ -6747,33 +7116,48 @@ function ReporteCampeonatosInventarioView({ campeonatos, inventario }) {
             <div className="kpi-value">{formatQ(totalesCampeonatos.pendiente)}</div>
           </div>
         </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: totalesCampeonatos.margen >= 0 ? "#E7F7F1" : "#FCEBEA", color: totalesCampeonatos.margen >= 0 ? "#158F63" : "#C0392B" }}>
+            <ArrowUpRight size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Margen (cobrado - gastado)</div>
+            <div className="kpi-value">{formatQ(totalesCampeonatos.margen)}</div>
+          </div>
+        </div>
       </div>
 
       <div className="panel">
-        <h2>Campeonatos</h2>
+        <h2>Programas y eventos</h2>
         {campeonatosResumen.length === 0 ? (
-          <div className="empty small">Todavía no hay campeonatos registrados.</div>
+          <div className="empty small">Todavía no hay programas registrados.</div>
         ) : (
           <table className="tabla-reporte">
             <thead>
               <tr>
-                <th>Campeonato</th>
+                <th>Programa</th>
+                <th>Tipo</th>
                 <th>Fecha</th>
                 <th>Inscritos</th>
                 <th>Cuota total</th>
                 <th>Cobrado</th>
                 <th>Pendiente</th>
+                <th>Gastado</th>
+                <th>Margen</th>
               </tr>
             </thead>
             <tbody>
               {campeonatosResumen.map((c) => (
                 <tr key={c.id}>
                   <td>{c.nombre}</td>
+                  <td>{tipoProgramaLabel(c.tipo)}</td>
                   <td>{c.fecha ? formatDiaLargo(c.fecha) : "—"}</td>
                   <td>{c.inscritos}</td>
                   <td>{formatQ(c.totalCuota)}</td>
                   <td>{formatQ(c.cobrado)}</td>
                   <td>{formatQ(c.pendiente)}</td>
+                  <td>{formatQ(c.gastado)}</td>
+                  <td style={{ color: c.margen >= 0 ? "#158F63" : "#C0392B", fontWeight: 600 }}>{formatQ(c.margen)}</td>
                 </tr>
               ))}
             </tbody>
@@ -7871,6 +8255,7 @@ function CampeonatosView({
   const [campeonatoAbiertoId, setCampeonatoAbiertoId] = useState(null);
   const [alumnoAInscribir, setAlumnoAInscribir] = useState("");
   const [montoInscribir, setMontoInscribir] = useState("");
+  const [filtroTipo, setFiltroTipo] = useState("");
 
   const campeonatoAbierto = campeonatos.find((c) => c.id === campeonatoAbiertoId) || null;
 
@@ -7880,6 +8265,12 @@ function CampeonatosView({
     return alumnos.filter((a) => !yaInscritos.has(a.id)).sort((a, b) => a.nombre.localeCompare(b.nombre));
   }, [campeonatoAbierto, alumnos]);
 
+  const alumnoAInscribirObj = alumnos.find((a) => a.id === alumnoAInscribir) || null;
+  const cuotaSugerida =
+    campeonatoAbierto && alumnoAInscribirObj
+      ? Number(campeonatoAbierto.cuotaPorCategoria?.[alumnoAInscribirObj.categoria] || 0)
+      : 0;
+
   function alumnoNombre(id) {
     return (alumnos.find((a) => a.id === id) || {}).nombre || "(alumno eliminado)";
   }
@@ -7887,27 +8278,59 @@ function CampeonatosView({
   function handleInscribir() {
     if (!alumnoAInscribir || !campeonatoAbierto) return;
     const monto = parseMonto(montoInscribir);
-    onInscribir(campeonatoAbierto.id, alumnoAInscribir, isNaN(monto) ? 0 : monto);
+    const montoFinal = !isNaN(monto) ? monto : cuotaSugerida || 0;
+    onInscribir(campeonatoAbierto.id, alumnoAInscribir, montoFinal, alumnoAInscribirObj?.categoria || null);
     setAlumnoAInscribir("");
     setMontoInscribir("");
   }
 
+  const contadorPorTipo = useMemo(() => {
+    const porTipo = {};
+    campeonatos.forEach((c) => {
+      const t = c.tipo || "campeonato";
+      porTipo[t] = (porTipo[t] || 0) + 1;
+    });
+    return porTipo;
+  }, [campeonatos]);
+
+  const campeonatosFiltrados = filtroTipo ? campeonatos.filter((c) => (c.tipo || "campeonato") === filtroTipo) : campeonatos;
+
   return (
     <div className="stack">
       <div className="toolbar">
-        <div />
+        <div className="filtros" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className={filtroTipo === "" ? "chip chip-active" : "chip"}
+            onClick={() => setFiltroTipo("")}
+          >
+            Todos ({campeonatos.length})
+          </button>
+          {TIPOS_PROGRAMA.filter((t) => contadorPorTipo[t.value]).map((t) => (
+            <button
+              type="button"
+              key={t.value}
+              className={filtroTipo === t.value ? "chip chip-active" : "chip"}
+              onClick={() => setFiltroTipo(t.value)}
+            >
+              {t.label} ({contadorPorTipo[t.value]})
+            </button>
+          ))}
+        </div>
         <button className="btn-primary" onClick={onNuevo}>
-          <Plus size={16} /> Nuevo campeonato
+          <Plus size={16} /> Nuevo programa
         </button>
       </div>
 
-      {campeonatos.length === 0 ? (
+      {campeonatosFiltrados.length === 0 ? (
         <div className="empty">
-          Todavía no hay campeonatos registrados. Agrega el primero con el botón de arriba.
+          {campeonatos.length === 0
+            ? "Todavía no hay programas registrados. Agrega el primero con el botón de arriba."
+            : "No hay programas de este tipo."}
         </div>
       ) : (
         <div className="stack" style={{ gap: 10 }}>
-          {campeonatos.map((c) => {
+          {campeonatosFiltrados.map((c) => {
             const total = c.inscripciones.length;
             const pagados = c.inscripciones.filter((i) => i.pagado).length;
             const recaudado = c.inscripciones.filter((i) => i.pagado).reduce((s, i) => s + i.montoCuota, 0);
@@ -7924,9 +8347,13 @@ function CampeonatosView({
                     <div className="evento-fila-titulo">
                       {abierto ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                       {c.nombre}
+                      <span className={"tipo-badge-programa tipo-badge-" + (c.tipo || "campeonato")}>
+                        {tipoProgramaLabel(c.tipo)}
+                      </span>
                     </div>
                     <div className="muted" style={{ fontSize: 13 }}>
                       {c.fecha ? formatDiaLargo(c.fecha) : "Sin fecha"}
+                      {c.fechaFin ? " – " + formatDiaLargo(c.fechaFin) : ""}
                       {(c.categorias || []).length ? " · " + c.categorias.join(", ") : ""}
                       {" · " + total + " inscrito" + (total === 1 ? "" : "s") + " (" + pagados + " pagado" + (pagados === 1 ? "" : "s") + ")"}
                     </div>
@@ -7961,6 +8388,7 @@ function CampeonatosView({
                           <thead>
                             <tr>
                               <th>Alumno</th>
+                              <th>Categoría</th>
                               <th className="num">Cuota</th>
                               <th>Estado</th>
                               <th></th>
@@ -7970,6 +8398,7 @@ function CampeonatosView({
                             {c.inscripciones.map((ins) => (
                               <tr key={ins.id}>
                                 <td className="cell-title">{alumnoNombre(ins.alumnoId)}</td>
+                                <td>{ins.categoria || "—"}</td>
                                 <td className="num">
                                   <input
                                     type="text"
@@ -8029,8 +8458,8 @@ function CampeonatosView({
                       <input
                         type="text"
                         inputMode="decimal"
-                        placeholder="Cuota (Q)"
-                        style={{ maxWidth: 120 }}
+                        placeholder={cuotaSugerida > 0 ? `Cuota (Q) — sugerida ${formatQ(cuotaSugerida)}` : "Cuota (Q)"}
+                        style={{ maxWidth: 220 }}
                         value={montoInscribir}
                         onChange={(e) => setMontoInscribir(e.target.value)}
                       />
@@ -8038,6 +8467,12 @@ function CampeonatosView({
                         <Plus size={15} /> Inscribir
                       </button>
                     </div>
+                    {cuotaSugerida > 0 && montoInscribir === "" && (
+                      <p className="muted" style={{ marginTop: 6 }}>
+                        Si dejas el monto en blanco, se inscribe con la cuota sugerida para{" "}
+                        {alumnoAInscribirObj?.categoria}: {formatQ(cuotaSugerida)}.
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
@@ -8053,8 +8488,11 @@ function CampeonatoModal({ initial, onSave, onCancel, enviando }) {
   const [form, setForm] = useState({
     id: initial.id || null,
     nombre: initial.nombre || "",
+    tipo: initial.tipo || "campeonato",
     fecha: initial.fecha || "",
+    fechaFin: initial.fechaFin || "",
     categorias: initial.categorias || [],
+    cuotaPorCategoria: initial.cuotaPorCategoria || {},
     notas: initial.notas || "",
   });
   const [error, setError] = useState(null);
@@ -8068,10 +8506,19 @@ function CampeonatoModal({ initial, onSave, onCancel, enviando }) {
     });
   }
 
+  function cambiarCuotaCategoria(c, valor) {
+    setForm((prev) => {
+      const siguiente = { ...prev.cuotaPorCategoria };
+      if (valor === "" || isNaN(Number(valor))) delete siguiente[c];
+      else siguiente[c] = Number(valor);
+      return { ...prev, cuotaPorCategoria: siguiente };
+    });
+  }
+
   function handleSubmit(e) {
     if (e && e.preventDefault) e.preventDefault();
     if (!form.nombre.trim()) {
-      setError("Escribe el nombre del campeonato.");
+      setError("Escribe el nombre del programa.");
       return;
     }
     setError(null);
@@ -8082,7 +8529,7 @@ function CampeonatoModal({ initial, onSave, onCancel, enviando }) {
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <h3>{form.id ? "Editar campeonato" : "Nuevo campeonato"}</h3>
+          <h3>{form.id ? "Editar programa" : "Nuevo programa"}</h3>
           <button className="icon-btn" onClick={onCancel} aria-label="Cerrar">
             <X size={18} />
           </button>
@@ -8090,19 +8537,37 @@ function CampeonatoModal({ initial, onSave, onCancel, enviando }) {
         {error && <div className="form-error">{error}</div>}
         <div className="form">
           <label>
+            Tipo
+            <select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+              {TIPOS_PROGRAMA.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             Nombre
             <input
               type="text"
               value={form.nombre}
               onChange={(e) => setForm({ ...form, nombre: e.target.value })}
-              placeholder="Ej: Copa Interligas 2026"
+              placeholder="Ej: Copa Interligas 2026, Viaje a Miami 2027…"
               autoFocus
             />
           </label>
-          <label>
-            Fecha (opcional)
-            <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
-          </label>
+          <div className="form-row">
+            <label>
+              Fecha {form.tipo === "viaje" || form.tipo === "curso" ? "de inicio" : ""} (opcional)
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
+            </label>
+            {(form.tipo === "viaje" || form.tipo === "curso") && (
+              <label>
+                Fecha de fin (opcional)
+                <input type="date" value={form.fechaFin} onChange={(e) => setForm({ ...form, fechaFin: e.target.value })} />
+              </label>
+            )}
+          </div>
           <div>
             <div className="form-section-label">
               Categorías {form.categorias.length > 0 && `(${form.categorias.length})`}
@@ -8117,6 +8582,28 @@ function CampeonatoModal({ initial, onSave, onCancel, enviando }) {
               ))}
             </div>
           </div>
+          {form.categorias.length > 0 && (
+            <div>
+              <div className="form-section-label">Cuota sugerida por categoría (opcional)</div>
+              <p className="muted" style={{ marginTop: -4 }}>
+                Se precarga al inscribir un alumno de esa categoría — queda editable caso por caso.
+              </p>
+              <div className="stack" style={{ gap: 6 }}>
+                {form.categorias.map((c) => (
+                  <div className="form-row" key={c} style={{ alignItems: "center" }}>
+                    <span style={{ width: 70 }}>{c}</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="Sin definir"
+                      value={form.cuotaPorCategoria[c] ?? ""}
+                      onChange={(e) => cambiarCuotaCategoria(c, e.target.value)}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <label>
             Notas (opcional)
             <textarea rows={2} value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} />
@@ -10999,13 +11486,15 @@ function AjusteSaldoModal({ alumno, onGuardar, onCancel, enviando }) {
 // entre el monto viejo y el nuevo (ver editar_pago en supabase-schema.sql),
 // nunca sobrescribiéndolo, así que esto es seguro aunque el saldo ya haya
 // cambiado por otro pago mientras tanto.
-function EditarPagoModal({ pago, alumnoNombre, onGuardar, onCancel, enviando }) {
+function EditarPagoModal({ pago, alumnoNombre, onGuardar, onCancel, enviando, campeonatos }) {
   const [monto, setMonto] = useState(String(pago.monto ?? ""));
   const [metodo, setMetodo] = useState(pago.metodo || METODOS_PAGO[0]);
   const [fecha, setFecha] = useState(pago.fecha);
   const [nota, setNota] = useState(pago.nota || "");
   const [tipo, setTipo] = useState(pago.tipo || "mensualidad");
+  const [campeonatoId, setCampeonatoId] = useState(pago.campeonatoId || "");
   const [error, setError] = useState(null);
+  const programasDisponibles = campeonatos || [];
 
   const montoNum = parseMonto(monto);
   // La diferencia que afecta el saldo de mensualidad solo aplica si el pago
@@ -11025,8 +11514,12 @@ function EditarPagoModal({ pago, alumnoNombre, onGuardar, onCancel, enviando }) 
       setError("Elige una fecha.");
       return;
     }
+    if (tipo === "programa" && !campeonatoId) {
+      setError("Elige a qué programa corresponde esta cuota.");
+      return;
+    }
     setError(null);
-    onGuardar(pago, { monto: montoNum, metodo, fecha, nota: nota.trim(), tipo });
+    onGuardar(pago, { monto: montoNum, metodo, fecha, nota: nota.trim(), tipo, campeonatoId: tipo === "programa" ? campeonatoId : null });
   }
 
   return (
@@ -11054,8 +11547,24 @@ function EditarPagoModal({ pago, alumnoNombre, onGuardar, onCancel, enviando }) 
             <select value={tipo} onChange={(e) => setTipo(e.target.value)}>
               <option value="mensualidad">Mensualidad</option>
               <option value="inscripcion">Inscripción</option>
+              <option value="uniforme">Uniforme</option>
+              <option value="clase_privada">Clase privada</option>
+              {programasDisponibles.length > 0 && <option value="programa">Cuota de programa</option>}
             </select>
           </label>
+          {tipo === "programa" && (
+            <label>
+              Programa
+              <select value={campeonatoId} onChange={(e) => setCampeonatoId(e.target.value)}>
+                <option value="">Elige uno…</option>
+                {programasDisponibles.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {tipoProgramaLabel(c.tipo)} · {c.nombre}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="form-row">
             <label>
               Monto
@@ -11328,6 +11837,19 @@ function Styles() {
       .badge-becado { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; color: #B4790A; background: #FCF1DD; padding: 1.5px 7px; border-radius: var(--radius-pill); vertical-align: middle; }
       .badge-numero { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; color: #6C6F72; background: #EFEFF0; padding: 1.5px 7px; border-radius: var(--radius-pill); vertical-align: middle; }
       .badge-campeonato { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; color: #0090C2; background: #E7F7FD; padding: 1.5px 7px; border-radius: var(--radius-pill); vertical-align: middle; }
+      .badge-tipo-pago { display: inline-block; margin-left: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; padding: 1.5px 7px; border-radius: var(--radius-pill); vertical-align: middle; }
+      .badge-tipo-inscripcion { color: #B4790A; background: #FCF1DD; }
+      .badge-tipo-uniforme { color: #0090C2; background: #E7F7FD; }
+      .badge-tipo-clase_privada { color: #6A3FB5; background: #F1E9FB; }
+      .badge-tipo-programa { color: #158F63; background: #E7F7F1; }
+      .chip { border: 1px solid var(--border); background: #fff; color: #8A8D90; font-size: 12.5px; font-weight: 600; padding: 7px 14px; border-radius: var(--radius-pill); cursor: pointer; }
+      .chip-active { background: var(--blue); border-color: var(--blue); color: #fff; }
+      .tipo-badge-programa { font-size: 10px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; padding: 3px 9px; border-radius: var(--radius-pill); margin-left: 8px; vertical-align: middle; }
+      .tipo-badge-campeonato { background: #E7F7F1; color: #158F63; }
+      .tipo-badge-viaje { background: #E7F7FD; color: #0090C2; }
+      .tipo-badge-curso { background: #FCF1DD; color: #B4790A; }
+      .tipo-badge-competencia { background: #F1E9FB; color: #6A3FB5; }
+      .tipo-badge-otro { background: #F0F2F3; color: var(--charcoal); }
 
       .cell-alumno { display: flex; align-items: center; gap: 10px; }
       .avatar-alumno { border-radius: 50%; object-fit: cover; flex-shrink: 0; }
