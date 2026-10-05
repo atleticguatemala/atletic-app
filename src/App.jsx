@@ -2554,16 +2554,28 @@ function PanelAdministrativo({ perfil, onLogout }) {
     }
   }
 
-  async function inscribirAlumnoCampeonato(campeonatoId, alumnoId, montoCuota, categoria) {
+  // Inscribe a uno o varios alumnos de una sola vez. `items` es una lista de
+  // { alumnoId, montoCuota, categoria }. Si alguno ya estaba inscrito (otra
+  // persona lo inscribió al mismo tiempo) se omite sin fallar el resto.
+  // Devuelve true si se guardó, para que la pantalla limpie la selección.
+  async function inscribirAlumnosCampeonato(campeonatoId, items) {
+    if (!items || items.length === 0) return false;
+    const filas = items.map((it) => ({
+      campeonato_id: campeonatoId,
+      alumno_id: it.alumnoId,
+      monto_cuota: it.montoCuota,
+      categoria: it.categoria || null,
+    }));
     const { error } = await supabase
       .from("campeonato_inscripciones")
-      .insert([{ campeonato_id: campeonatoId, alumno_id: alumnoId, monto_cuota: montoCuota, categoria: categoria || null }]);
+      .upsert(filas, { onConflict: "campeonato_id,alumno_id", ignoreDuplicates: true });
     if (error) {
-      showToast("No se pudo inscribir al alumno (revisa tu conexión). Inténtalo de nuevo.", true);
-      return;
+      showToast("No se pudo inscribir (revisa tu conexión). Inténtalo de nuevo.", true);
+      return false;
     }
     await cargarDatos({ silent: true });
-    showToast("Alumno inscrito.");
+    showToast(items.length === 1 ? "Alumno inscrito." : items.length + " alumnos inscritos.");
+    return true;
   }
 
   async function actualizarInscripcionCampeonato(inscripcion, cambios) {
@@ -2910,7 +2922,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
                 onNuevo={() => setCampeonatoModal({})}
                 onEditar={(c) => setCampeonatoModal(c)}
                 onEliminar={noAutorizado}
-                onInscribir={inscribirAlumnoCampeonato}
+                onInscribir={inscribirAlumnosCampeonato}
                 onActualizarInscripcion={actualizarInscripcionCampeonato}
                 onEliminarInscripcion={eliminarInscripcionCampeonato}
               />
@@ -3883,16 +3895,28 @@ function PanelAdmin({ perfil, onLogout }) {
     }
   }
 
-  async function inscribirAlumnoCampeonato(campeonatoId, alumnoId, montoCuota, categoria) {
+  // Inscribe a uno o varios alumnos de una sola vez. `items` es una lista de
+  // { alumnoId, montoCuota, categoria }. Si alguno ya estaba inscrito (otra
+  // persona lo inscribió al mismo tiempo) se omite sin fallar el resto.
+  // Devuelve true si se guardó, para que la pantalla limpie la selección.
+  async function inscribirAlumnosCampeonato(campeonatoId, items) {
+    if (!items || items.length === 0) return false;
+    const filas = items.map((it) => ({
+      campeonato_id: campeonatoId,
+      alumno_id: it.alumnoId,
+      monto_cuota: it.montoCuota,
+      categoria: it.categoria || null,
+    }));
     const { error } = await supabase
       .from("campeonato_inscripciones")
-      .insert([{ campeonato_id: campeonatoId, alumno_id: alumnoId, monto_cuota: montoCuota, categoria: categoria || null }]);
+      .upsert(filas, { onConflict: "campeonato_id,alumno_id", ignoreDuplicates: true });
     if (error) {
-      showToast("No se pudo inscribir al alumno (revisa tu conexión). Inténtalo de nuevo.", true);
-      return;
+      showToast("No se pudo inscribir (revisa tu conexión). Inténtalo de nuevo.", true);
+      return false;
     }
     await cargarDatos({ silent: true });
-    showToast("Alumno inscrito.");
+    showToast(items.length === 1 ? "Alumno inscrito." : items.length + " alumnos inscritos.");
+    return true;
   }
 
   async function actualizarInscripcionCampeonato(inscripcion, cambios) {
@@ -4661,7 +4685,7 @@ function PanelAdmin({ perfil, onLogout }) {
                 onNuevo={() => setCampeonatoModal({})}
                 onEditar={(c) => setCampeonatoModal(c)}
                 onEliminar={(c) => setConfirmDeleteCampeonato(c)}
-                onInscribir={inscribirAlumnoCampeonato}
+                onInscribir={inscribirAlumnosCampeonato}
                 onActualizarInscripcion={actualizarInscripcionCampeonato}
                 onEliminarInscripcion={eliminarInscripcionCampeonato}
               />
@@ -8241,6 +8265,250 @@ function ResultadoModal({ evento, initial, alumnosDisponibles, onSave, onCancel,
 // tiene su propia cuota (puede variar de un alumno a otro) y si ya la
 // pagó. Sirve tanto para alumnos regulares como para los marcados "solo
 // campeonato" — cualquiera puede inscribirse.
+function normalizarBusqueda(s) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .trim();
+}
+
+// Selector para inscribir uno o varios alumnos a un programa: búsqueda por
+// nombre (o encargado), filtro por categoría y casillas de selección múltiple.
+// La selección se conserva al cambiar de categoría o de texto de búsqueda,
+// así se pueden juntar jugadores de varias categorías en una sola inscripción.
+function SelectorAlumnosInscribir({ campeonato, alumnosDisponibles, onInscribir }) {
+  const [busqueda, setBusqueda] = useState("");
+  const [categoria, setCategoria] = useState("");
+  const [seleccionados, setSeleccionados] = useState(() => new Set());
+  const [monto, setMonto] = useState("");
+  const [enviando, setEnviando] = useState(false);
+
+  const categoriasConConteo = useMemo(() => {
+    const conteo = {};
+    alumnosDisponibles.forEach((a) => {
+      const c = a.categoria || "Sin categoría";
+      conteo[c] = (conteo[c] || 0) + 1;
+    });
+    const orden = (c) => {
+      const i = CATEGORIAS.indexOf(c);
+      return i === -1 ? 999 : i;
+    };
+    return Object.keys(conteo)
+      .sort((a, b) => orden(a) - orden(b) || a.localeCompare(b))
+      .map((c) => ({ categoria: c, total: conteo[c] }));
+  }, [alumnosDisponibles]);
+
+  const visibles = useMemo(() => {
+    const q = normalizarBusqueda(busqueda);
+    return alumnosDisponibles.filter((a) => {
+      if (categoria && (a.categoria || "Sin categoría") !== categoria) return false;
+      if (!q) return true;
+      return normalizarBusqueda(a.nombre).includes(q) || normalizarBusqueda(a.encargado).includes(q);
+    });
+  }, [alumnosDisponibles, busqueda, categoria]);
+
+  // Solo cuentan los seleccionados que siguen disponibles (tras inscribir, salen de la lista).
+  const elegidos = useMemo(
+    () => alumnosDisponibles.filter((a) => seleccionados.has(a.id)),
+    [alumnosDisponibles, seleccionados]
+  );
+
+  const todosVisiblesElegidos = visibles.length > 0 && visibles.every((a) => seleccionados.has(a.id));
+
+  function cuotaSugeridaDe(a) {
+    return Number(campeonato.cuotaPorCategoria?.[a.categoria] || 0);
+  }
+
+  const montoEscrito = parseMonto(monto);
+  const hayMontoEscrito = monto.trim() !== "" && !isNaN(montoEscrito) && montoEscrito >= 0;
+  const montoDe = (a) => (hayMontoEscrito ? montoEscrito : cuotaSugeridaDe(a));
+  const totalEstimado = elegidos.reduce((s, a) => s + montoDe(a), 0);
+
+  function alternar(id) {
+    setSeleccionados((prev) => {
+      const sig = new Set(prev);
+      if (sig.has(id)) sig.delete(id);
+      else sig.add(id);
+      return sig;
+    });
+  }
+
+  function alternarVisibles() {
+    setSeleccionados((prev) => {
+      const sig = new Set(prev);
+      if (todosVisiblesElegidos) visibles.forEach((a) => sig.delete(a.id));
+      else visibles.forEach((a) => sig.add(a.id));
+      return sig;
+    });
+  }
+
+  async function inscribir() {
+    if (elegidos.length === 0 || enviando) return;
+    if (monto.trim() !== "" && !hayMontoEscrito) return;
+    setEnviando(true);
+    try {
+      const ok = await onInscribir(
+        campeonato.id,
+        elegidos.map((a) => ({ alumnoId: a.id, montoCuota: montoDe(a), categoria: a.categoria || null }))
+      );
+      if (ok) {
+        setSeleccionados(new Set());
+        setMonto("");
+      }
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  if (alumnosDisponibles.length === 0) {
+    return (
+      <p className="muted" style={{ marginTop: 10 }}>
+        No hay más alumnos para inscribir en este programa.
+      </p>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontWeight: 600, marginBottom: 8 }}>Inscribir alumnos</div>
+
+      <input
+        type="search"
+        placeholder="Buscar por nombre del alumno o encargado…"
+        value={busqueda}
+        onChange={(e) => setBusqueda(e.target.value)}
+        style={{ width: "100%", marginBottom: 8 }}
+        aria-label="Buscar alumno"
+      />
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+        <button
+          type="button"
+          className={categoria === "" ? "chip chip-active" : "chip"}
+          onClick={() => setCategoria("")}
+        >
+          Todas ({alumnosDisponibles.length})
+        </button>
+        {categoriasConConteo.map((c) => (
+          <button
+            type="button"
+            key={c.categoria}
+            className={categoria === c.categoria ? "chip chip-active" : "chip"}
+            onClick={() => setCategoria(categoria === c.categoria ? "" : c.categoria)}
+          >
+            {c.categoria} ({c.total})
+          </button>
+        ))}
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+          marginBottom: 6,
+        }}
+      >
+        <button type="button" className="btn-secondary" onClick={alternarVisibles} disabled={visibles.length === 0}>
+          {todosVisiblesElegidos ? "Quitar selección de los " : "Seleccionar los "}
+          {visibles.length} visible{visibles.length === 1 ? "" : "s"}
+        </button>
+        <span className="muted" style={{ fontSize: 13 }}>
+          {elegidos.length} seleccionado{elegidos.length === 1 ? "" : "s"}
+          {elegidos.length > 0 && (
+            <>
+              {" · "}
+              <button
+                type="button"
+                onClick={() => setSeleccionados(new Set())}
+                style={{ background: "none", border: "none", padding: 0, color: "inherit", textDecoration: "underline", cursor: "pointer" }}
+              >
+                limpiar
+              </button>
+            </>
+          )}
+        </span>
+      </div>
+
+      <div
+        style={{
+          maxHeight: 280,
+          overflowY: "auto",
+          border: "1px solid var(--border-soft)",
+          borderRadius: 8,
+        }}
+      >
+        {visibles.length === 0 ? (
+          <div className="empty" style={{ padding: 14 }}>
+            Ningún alumno coincide con la búsqueda.
+          </div>
+        ) : (
+          visibles.map((a) => {
+            const marcado = seleccionados.has(a.id);
+            const sugerida = cuotaSugeridaDe(a);
+            return (
+              <label
+                key={a.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "9px 12px",
+                  cursor: "pointer",
+                  borderBottom: "1px solid var(--border-soft)",
+                  background: marcado ? "rgba(0,182,241,0.10)" : "transparent",
+                }}
+              >
+                <input type="checkbox" checked={marcado} onChange={() => alternar(a.id)} />
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  {a.nombre}
+                  {a.soloCampeonato ? <span className="muted"> (solo campeonato)</span> : null}
+                </span>
+                <span className="muted" style={{ fontSize: 13, whiteSpace: "nowrap" }}>
+                  {a.categoria || "Sin categoría"}
+                  {sugerida > 0 ? " · " + formatQ(sugerida) : ""}
+                </span>
+              </label>
+            );
+          })
+        )}
+      </div>
+
+      <div className="form-row" style={{ marginTop: 10 }}>
+        <input
+          type="text"
+          inputMode="decimal"
+          placeholder="Cuota (Q) — en blanco usa la sugerida por categoría"
+          style={{ maxWidth: 360 }}
+          value={monto}
+          onChange={(e) => setMonto(e.target.value)}
+        />
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={inscribir}
+          disabled={elegidos.length === 0 || enviando || (monto.trim() !== "" && !hayMontoEscrito)}
+        >
+          <Plus size={15} />{" "}
+          {enviando
+            ? "Inscribiendo…"
+            : elegidos.length > 1
+            ? "Inscribir " + elegidos.length + " alumnos"
+            : "Inscribir alumno"}
+        </button>
+      </div>
+      {elegidos.length > 0 && totalEstimado > 0 && (
+        <p className="muted" style={{ marginTop: 6 }}>
+          Total de cuotas a inscribir: {formatQ(totalEstimado)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CampeonatosView({
   campeonatos,
   alumnos,
@@ -8253,8 +8521,6 @@ function CampeonatosView({
   onEliminarInscripcion,
 }) {
   const [campeonatoAbiertoId, setCampeonatoAbiertoId] = useState(null);
-  const [alumnoAInscribir, setAlumnoAInscribir] = useState("");
-  const [montoInscribir, setMontoInscribir] = useState("");
   const [filtroTipo, setFiltroTipo] = useState("");
 
   const campeonatoAbierto = campeonatos.find((c) => c.id === campeonatoAbiertoId) || null;
@@ -8265,23 +8531,8 @@ function CampeonatosView({
     return alumnos.filter((a) => !yaInscritos.has(a.id)).sort((a, b) => a.nombre.localeCompare(b.nombre));
   }, [campeonatoAbierto, alumnos]);
 
-  const alumnoAInscribirObj = alumnos.find((a) => a.id === alumnoAInscribir) || null;
-  const cuotaSugerida =
-    campeonatoAbierto && alumnoAInscribirObj
-      ? Number(campeonatoAbierto.cuotaPorCategoria?.[alumnoAInscribirObj.categoria] || 0)
-      : 0;
-
   function alumnoNombre(id) {
     return (alumnos.find((a) => a.id === id) || {}).nombre || "(alumno eliminado)";
-  }
-
-  function handleInscribir() {
-    if (!alumnoAInscribir || !campeonatoAbierto) return;
-    const monto = parseMonto(montoInscribir);
-    const montoFinal = !isNaN(monto) ? monto : cuotaSugerida || 0;
-    onInscribir(campeonatoAbierto.id, alumnoAInscribir, montoFinal, alumnoAInscribirObj?.categoria || null);
-    setAlumnoAInscribir("");
-    setMontoInscribir("");
   }
 
   const contadorPorTipo = useMemo(() => {
@@ -8443,36 +8694,12 @@ function CampeonatosView({
                       </div>
                     )}
 
-                    <div className="form-row" style={{ marginTop: 10 }}>
-                      <select value={alumnoAInscribir} onChange={(e) => setAlumnoAInscribir(e.target.value)}>
-                        <option value="">
-                          {alumnosDisponiblesParaInscribir.length === 0 ? "No hay más alumnos para inscribir" : "Elige un alumno…"}
-                        </option>
-                        {alumnosDisponiblesParaInscribir.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.nombre}
-                            {a.soloCampeonato ? " (solo campeonato)" : ""}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        placeholder={cuotaSugerida > 0 ? `Cuota (Q) — sugerida ${formatQ(cuotaSugerida)}` : "Cuota (Q)"}
-                        style={{ maxWidth: 220 }}
-                        value={montoInscribir}
-                        onChange={(e) => setMontoInscribir(e.target.value)}
-                      />
-                      <button type="button" className="btn-secondary" onClick={handleInscribir} disabled={!alumnoAInscribir}>
-                        <Plus size={15} /> Inscribir
-                      </button>
-                    </div>
-                    {cuotaSugerida > 0 && montoInscribir === "" && (
-                      <p className="muted" style={{ marginTop: 6 }}>
-                        Si dejas el monto en blanco, se inscribe con la cuota sugerida para{" "}
-                        {alumnoAInscribirObj?.categoria}: {formatQ(cuotaSugerida)}.
-                      </p>
-                    )}
+                    <SelectorAlumnosInscribir
+                      key={c.id}
+                      campeonato={c}
+                      alumnosDisponibles={alumnosDisponiblesParaInscribir}
+                      onInscribir={onInscribir}
+                    />
                   </div>
                 )}
               </div>
