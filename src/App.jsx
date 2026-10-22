@@ -148,6 +148,25 @@ function alumnoToDb(a) {
   };
 }
 
+// Crea un alumno que NO entrena en la academia y solo juega campeonatos
+// (sin mensualidad). Lo usa el selector de "Programas y eventos" para dar de
+// alta a un jugador al momento de inscribirlo. Devuelve { id, error }.
+async function insertarAlumnoSoloCampeonato(datos) {
+  const payload = alumnoToDb({
+    nombre: (datos.nombre || "").trim(),
+    encargado: (datos.encargado || "").trim(),
+    telefono: (datos.telefono || "").trim(),
+    categoria: datos.categoria,
+    horario: HORARIOS[0],
+    tarifaMensual: 0,
+    estado: "activo",
+    fechaNacimiento: datos.fechaNacimiento || null,
+    soloCampeonato: true,
+  });
+  const { data, error } = await supabase.from("alumnos").insert(payload).select("id").single();
+  return { id: data?.id || null, error };
+}
+
 // Staff (tabla "perfiles"): quién tiene acceso a la app, con qué rol, y
 // -si es entrenador- de qué categorías está a cargo.
 function perfilStaffFromDb(r) {
@@ -2575,6 +2594,19 @@ function PanelAdministrativo({ perfil, onLogout }) {
     }
   }
 
+  // Crea un alumno que solo juega campeonatos (sin mensualidad) desde
+  // "Programas y eventos". Devuelve el id nuevo, o null si falló.
+  async function crearAlumnoSoloCampeonato(datos) {
+    const { id, error } = await insertarAlumnoSoloCampeonato(datos);
+    if (error || !id) {
+      showToast("No se pudo crear al alumno (revisa tu conexión). Inténtalo de nuevo.", true);
+      return null;
+    }
+    await cargarDatos({ silent: true });
+    showToast("Alumno creado (solo campeonatos).");
+    return id;
+  }
+
   // Inscribe a uno o varios alumnos de una sola vez. `items` es una lista de
   // { alumnoId, montoCuota, categoria }. Si alguno ya estaba inscrito (otra
   // persona lo inscribió al mismo tiempo) se omite sin fallar el resto.
@@ -2956,6 +2988,7 @@ function PanelAdministrativo({ perfil, onLogout }) {
                 onEditar={(c) => setCampeonatoModal(c)}
                 onEliminar={noAutorizado}
                 onInscribir={inscribirAlumnosCampeonato}
+                onCrearAlumno={crearAlumnoSoloCampeonato}
                 onActualizarInscripcion={actualizarInscripcionCampeonato}
                 onEliminarInscripcion={eliminarInscripcionCampeonato}
               />
@@ -3928,6 +3961,19 @@ function PanelAdmin({ perfil, onLogout }) {
     }
   }
 
+  // Crea un alumno que solo juega campeonatos (sin mensualidad) desde
+  // "Programas y eventos". Devuelve el id nuevo, o null si falló.
+  async function crearAlumnoSoloCampeonato(datos) {
+    const { id, error } = await insertarAlumnoSoloCampeonato(datos);
+    if (error || !id) {
+      showToast("No se pudo crear al alumno (revisa tu conexión). Inténtalo de nuevo.", true);
+      return null;
+    }
+    await cargarDatos({ silent: true });
+    showToast("Alumno creado (solo campeonatos).");
+    return id;
+  }
+
   // Inscribe a uno o varios alumnos de una sola vez. `items` es una lista de
   // { alumnoId, montoCuota, categoria }. Si alguno ya estaba inscrito (otra
   // persona lo inscribió al mismo tiempo) se omite sin fallar el resto.
@@ -4729,6 +4775,7 @@ function PanelAdmin({ perfil, onLogout }) {
                 onEditar={(c) => setCampeonatoModal(c)}
                 onEliminar={(c) => setConfirmDeleteCampeonato(c)}
                 onInscribir={inscribirAlumnosCampeonato}
+                onCrearAlumno={crearAlumnoSoloCampeonato}
                 onActualizarInscripcion={actualizarInscripcionCampeonato}
                 onEliminarInscripcion={eliminarInscripcionCampeonato}
               />
@@ -8368,12 +8415,51 @@ function normalizarBusqueda(s) {
 // nombre (o encargado), filtro por categoría y casillas de selección múltiple.
 // La selección se conserva al cambiar de categoría o de texto de búsqueda,
 // así se pueden juntar jugadores de varias categorías en una sola inscripción.
-function SelectorAlumnosInscribir({ campeonato, alumnosDisponibles, onInscribir }) {
+function SelectorAlumnosInscribir({ campeonato, alumnosDisponibles, onInscribir, onCrearAlumno }) {
   const [busqueda, setBusqueda] = useState("");
   const [categoria, setCategoria] = useState("");
   const [seleccionados, setSeleccionados] = useState(() => new Set());
   const [monto, setMonto] = useState("");
   const [enviando, setEnviando] = useState(false);
+  // Alta rápida de un jugador que no entrena en la academia (solo campeonatos).
+  const [creando, setCreando] = useState(false);
+  const [guardandoNuevo, setGuardandoNuevo] = useState(false);
+  const [nuevo, setNuevo] = useState({ nombre: "", categoria: CATEGORIAS[0], encargado: "", telefono: "", fechaNacimiento: "" });
+  const [errorNuevo, setErrorNuevo] = useState("");
+
+  function abrirAltaRapida(nombreInicial) {
+    setNuevo({
+      nombre: nombreInicial || "",
+      categoria: categoria && CATEGORIAS.includes(categoria) ? categoria : CATEGORIAS[0],
+      encargado: "",
+      telefono: "",
+      fechaNacimiento: "",
+    });
+    setErrorNuevo("");
+    setCreando(true);
+  }
+
+  async function guardarNuevo() {
+    if (guardandoNuevo) return;
+    if (!nuevo.nombre.trim()) {
+      setErrorNuevo("Escribe el nombre del alumno.");
+      return;
+    }
+    setErrorNuevo("");
+    setGuardandoNuevo(true);
+    try {
+      const id = await onCrearAlumno(nuevo);
+      if (id) {
+        // Queda ya marcado para inscribirlo con los demás.
+        setSeleccionados((prev) => new Set(prev).add(id));
+        setBusqueda("");
+        setCategoria("");
+        setCreando(false);
+      }
+    } finally {
+      setGuardandoNuevo(false);
+    }
+  }
 
   const categoriasConConteo = useMemo(() => {
     const conteo = {};
@@ -8452,18 +8538,107 @@ function SelectorAlumnosInscribir({ campeonato, alumnosDisponibles, onInscribir 
     }
   }
 
+  const altaRapida = creando ? (
+    <div
+      style={{
+        border: "1px solid var(--border-soft)",
+        borderRadius: 8,
+        padding: 12,
+        marginBottom: 10,
+        background: "rgba(0,182,241,0.06)",
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 2 }}>Alumno nuevo (solo campeonatos)</div>
+      <p className="muted" style={{ marginTop: 0, marginBottom: 8, fontSize: 13 }}>
+        Para jugadores que no entrenan en la academia. No tienen mensualidad. Se crea y queda marcado
+        para inscribirlo en este programa.
+      </p>
+      {errorNuevo && <div className="form-error">{errorNuevo}</div>}
+      <div className="form-row">
+        <label>
+          Nombre completo
+          <input
+            type="text"
+            value={nuevo.nombre}
+            onChange={(e) => setNuevo({ ...nuevo, nombre: e.target.value })}
+            autoFocus
+          />
+        </label>
+        <label>
+          Categoría
+          <select value={nuevo.categoria} onChange={(e) => setNuevo({ ...nuevo, categoria: e.target.value })}>
+            {CATEGORIAS.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="form-row">
+        <label>
+          Encargado (opcional)
+          <input
+            type="text"
+            value={nuevo.encargado}
+            onChange={(e) => setNuevo({ ...nuevo, encargado: e.target.value })}
+          />
+        </label>
+        <label>
+          Teléfono (opcional)
+          <input
+            type="text"
+            inputMode="tel"
+            value={nuevo.telefono}
+            onChange={(e) => setNuevo({ ...nuevo, telefono: e.target.value })}
+          />
+        </label>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+        <button type="button" className="btn-primary" onClick={guardarNuevo} disabled={guardandoNuevo}>
+          <Plus size={15} /> {guardandoNuevo ? "Creando…" : "Crear y agregar a la selección"}
+        </button>
+        <button type="button" className="btn-secondary" onClick={() => setCreando(false)} disabled={guardandoNuevo}>
+          Cancelar
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   if (alumnosDisponibles.length === 0) {
     return (
-      <p className="muted" style={{ marginTop: 10 }}>
-        No hay más alumnos para inscribir en este programa.
-      </p>
+      <div style={{ marginTop: 10 }}>
+        <p className="muted">No hay más alumnos para inscribir en este programa.</p>
+        {altaRapida}
+        {!creando && (
+          <button type="button" className="btn-secondary" onClick={() => abrirAltaRapida("")}>
+            <Plus size={15} /> Crear alumno nuevo (solo campeonato)
+          </button>
+        )}
+      </div>
     );
   }
 
   return (
     <div style={{ marginTop: 12 }}>
-      <div style={{ fontWeight: 600, marginBottom: 8 }}>Inscribir alumnos</div>
-
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+          marginBottom: 8,
+        }}
+      >
+        <div style={{ fontWeight: 600 }}>Inscribir alumnos</div>
+        {!creando && (
+          <button type="button" className="btn-secondary" onClick={() => abrirAltaRapida("")}>
+            <Plus size={15} /> Crear alumno nuevo (solo campeonato)
+          </button>
+        )}
+      </div>
+      {altaRapida}
       <input
         type="search"
         placeholder="Buscar por nombre del alumno o encargado…"
@@ -8535,6 +8710,13 @@ function SelectorAlumnosInscribir({ campeonato, alumnosDisponibles, onInscribir 
         {visibles.length === 0 ? (
           <div className="empty" style={{ padding: 14 }}>
             Ningún alumno coincide con la búsqueda.
+            {busqueda.trim() && !creando && (
+              <div style={{ marginTop: 8 }}>
+                <button type="button" className="btn-secondary" onClick={() => abrirAltaRapida(busqueda.trim())}>
+                  <Plus size={15} /> Crear «{busqueda.trim()}» como alumno nuevo (solo campeonato)
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           visibles.map((a) => {
@@ -8608,6 +8790,7 @@ function CampeonatosView({
   onEditar,
   onEliminar,
   onInscribir,
+  onCrearAlumno,
   onActualizarInscripcion,
   onEliminarInscripcion,
 }) {
@@ -8790,6 +8973,7 @@ function CampeonatosView({
                       campeonato={c}
                       alumnosDisponibles={alumnosDisponiblesParaInscribir}
                       onInscribir={onInscribir}
+                      onCrearAlumno={onCrearAlumno}
                     />
                   </div>
                 )}
