@@ -861,6 +861,27 @@ function mensajeRecordatorioPago(alumno) {
   return lineas.join("\n");
 }
 
+// Igual que el anterior pero para cuotas pendientes de programas y eventos
+// (campeonatos, viajes, cursos). `items` = [{ nombre, monto }].
+function mensajeRecordatorioPrograma(alumno, items) {
+  const total = items.reduce((s, i) => s + Number(i.monto || 0), 0);
+  const lineas = [];
+  lineas.push(`Hola${alumno.encargado ? " " + alumno.encargado : ""}, le saludamos de Atletic Guatemala.`);
+  if (items.length === 1) {
+    lineas.push(
+      `Le recordamos que la cuota de ${items[0].nombre} de ${alumno.nombre} está pendiente por ${formatQ(items[0].monto)}.`
+    );
+  } else {
+    lineas.push(`Le recordamos que ${alumno.nombre} tiene estas cuotas pendientes:`);
+    items.forEach((i) => lineas.push(`• ${i.nombre}: ${formatQ(i.monto)}`));
+    lineas.push(`Total: ${formatQ(total)}.`);
+  }
+  lineas.push("Le agradecemos confirmar su pago. Cualquier duda, con gusto le apoyamos.");
+  lineas.push("");
+  lineas.push("Atletic Guatemala");
+  return lineas.join("\n");
+}
+
 // Arma el reporte semanal de operación (CRM, cobros, asistencia y próximos
 // eventos) de los últimos 7 días, listo para copiar o mandar por WhatsApp
 // — pensado para el reporte que Alejandro le manda al dueño cada semana.
@@ -2912,7 +2933,19 @@ function PanelAdministrativo({ perfil, onLogout }) {
               />
             )}
 
-            {tab === "cartera" && <CarteraView alumnosActivos={alumnosMensuales} />}
+            {tab === "cartera" && (
+              <CarteraView
+                alumnosActivos={alumnosMensuales}
+                alumnos={alumnos}
+                campeonatos={campeonatos}
+                onRegistrarPago={(alumnoId) => {
+                  setPagoForm({ ...pagoFormVacio(), alumnoId });
+                  setTab("pago");
+                  const g = grupoDeTab(GRUPOS_NAV_ADMINISTRATIVO, "pago");
+                  if (g) setOpenGroup(g);
+                }}
+              />
+            )}
 
             {tab === "campeonatos" && (
               <CampeonatosView
@@ -4536,7 +4569,17 @@ function PanelAdmin({ perfil, onLogout }) {
               />
             )}
 
-            {tab === "cartera" && <CarteraView alumnosActivos={alumnosMensuales} />}
+            {tab === "cartera" && (
+              <CarteraView
+                alumnosActivos={alumnosMensuales}
+                alumnos={alumnos}
+                campeonatos={campeonatos}
+                onRegistrarPago={(alumnoId) => {
+                  setPagoForm({ ...pagoFormVacio(), alumnoId });
+                  irTab("pago");
+                }}
+              />
+            )}
 
             {tab === "asistencia" && (
               <AsistenciaView
@@ -5459,10 +5502,16 @@ function AlumnosView({
   );
 }
 
-function BuscadorAlumno({ alumnos, seleccionado, onSeleccionar }) {
+// `idsPendientes` (opcional, un Set de ids): si se pasa, la lista arranca
+// mostrando solo esos alumnos (los que deben algo) y aparece una casilla para
+// ver a todos — hace falta porque un alumno al día todavía puede pagar una
+// inscripción, un uniforme o una mensualidad adelantada.
+function BuscadorAlumno({ alumnos, seleccionado, onSeleccionar, idsPendientes }) {
   const [query, setQuery] = useState("");
   const [abierto, setAbierto] = useState(false);
+  const [soloPendientes, setSoloPendientes] = useState(true);
   const wrapRef = React.useRef(null);
+  const filtraPendientes = !!idsPendientes && soloPendientes;
 
   useEffect(() => {
     function handleClickFuera(e) {
@@ -5476,14 +5525,15 @@ function BuscadorAlumno({ alumnos, seleccionado, onSeleccionar }) {
 
   const resultados = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const universo = filtraPendientes ? alumnos.filter((a) => idsPendientes.has(a.id)) : alumnos;
     const base = q
-      ? alumnos.filter(
+      ? universo.filter(
           (a) =>
             a.nombre.toLowerCase().includes(q) || (a.encargado || "").toLowerCase().includes(q)
         )
-      : alumnos;
+      : universo;
     return base.slice(0, 30);
-  }, [alumnos, query]);
+  }, [alumnos, query, filtraPendientes, idsPendientes]);
 
   if (seleccionado && !abierto) {
     return (
@@ -5524,8 +5574,32 @@ function BuscadorAlumno({ alumnos, seleccionado, onSeleccionar }) {
       </div>
       {abierto && (
         <div className="buscador-lista">
+          {idsPendientes && (
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "8px 12px",
+                fontSize: 13,
+                cursor: "pointer",
+                borderBottom: "1px solid var(--border-soft)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={soloPendientes}
+                onChange={(e) => setSoloPendientes(e.target.checked)}
+              />
+              Solo con saldo pendiente ({idsPendientes.size})
+            </label>
+          )}
           {resultados.length === 0 ? (
-            <div className="buscador-vacio">No se encontró ningún alumno con ese nombre.</div>
+            <div className="buscador-vacio">
+              {filtraPendientes
+                ? "Ningún alumno con saldo pendiente coincide. Desmarca la casilla de arriba para buscar entre todos."
+                : "No se encontró ningún alumno con ese nombre."}
+            </div>
           ) : (
             resultados.map((a) => (
               <button
@@ -5572,6 +5646,22 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
   }
 
   const programasDisponibles = campeonatos || [];
+
+  // Quién debe algo: saldo de mensualidad por cobrar, o una cuota de programa
+  // marcada como pendiente. El buscador arranca mostrando solo a estos.
+  const idsPendientes = useMemo(() => {
+    const visibles = new Set(alumnosActivos.map((a) => a.id));
+    const ids = new Set();
+    alumnosActivos.forEach((a) => {
+      if (Number(a.saldoPendiente || 0) > 0) ids.add(a.id);
+    });
+    (campeonatos || []).forEach((c) =>
+      c.inscripciones.forEach((i) => {
+        if (!i.pagado && Number(i.montoCuota || 0) > 0 && visibles.has(i.alumnoId)) ids.add(i.alumnoId);
+      })
+    );
+    return ids;
+  }, [alumnosActivos, campeonatos]);
   const programaSeleccionado = programasDisponibles.find((c) => c.id === pagoForm.campeonatoIdPago) || null;
   const cuotaSugeridaPrograma =
     programaSeleccionado && alumnoSeleccionado
@@ -5600,6 +5690,7 @@ function PagoView({ alumnosActivos, pagoForm, setPagoForm, onSubmit, pagosRecien
               <BuscadorAlumno
                 alumnos={alumnosActivos}
                 seleccionado={alumnoSeleccionado}
+                idsPendientes={idsPendientes}
                 onSeleccionar={(id) => setPagoForm({ ...pagoForm, alumnoId: id })}
               />
             </label>
@@ -10492,36 +10583,68 @@ function ConvertirLeadModal({ lead, onConfirmar, onCancelar, enviando }) {
 // ya armado listo para copiar o mandar directo a WhatsApp al teléfono del
 // encargado. Nadie se manda automáticamente — la persona elige y confirma
 // el envío desde su propio WhatsApp, igual que con las convocatorias.
-function CarteraView({ alumnosActivos }) {
+function CarteraView({ alumnosActivos, alumnos = [], campeonatos = [], onRegistrarPago }) {
   const [busqueda, setBusqueda] = useState("");
   const [copiadoId, setCopiadoId] = useState(null);
+  const [vista, setVista] = useState("mensualidades");
+
+  const coincide = (a, q) =>
+    !q ||
+    a.nombre.toLowerCase().includes(q) ||
+    (a.encargado || "").toLowerCase().includes(q) ||
+    (a.categoria || "").toLowerCase().includes(q);
+
+  const conDeudaTodos = useMemo(
+    () => alumnosActivos.filter((a) => Number(a.saldoPendiente || 0) > 0),
+    [alumnosActivos]
+  );
+  const totalMensualidades = conDeudaTodos.reduce((s, a) => s + Number(a.saldoPendiente || 0), 0);
 
   const conDeuda = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
-    return alumnosActivos
-      .filter((a) => Number(a.saldoPendiente || 0) > 0)
-      .filter((a) =>
-        q
-          ? a.nombre.toLowerCase().includes(q) ||
-            (a.encargado || "").toLowerCase().includes(q) ||
-            (a.categoria || "").toLowerCase().includes(q)
-          : true
-      )
+    return conDeudaTodos
+      .filter((a) => coincide(a, q))
       .sort((a, b) => Number(b.saldoPendiente || 0) - Number(a.saldoPendiente || 0));
-  }, [alumnosActivos, busqueda]);
+  }, [conDeudaTodos, busqueda]);
 
-  const totalDeuda = conDeuda.reduce((s, a) => s + Number(a.saldoPendiente || 0), 0);
+  // Cuotas de programas y eventos sin pagar, agrupadas por alumno. Incluye a
+  // los alumnos "solo campeonato", que no aparecen en la cartera mensual.
+  const programasPorAlumnoTodos = useMemo(() => {
+    const porAlumno = new Map();
+    campeonatos.forEach((c) => {
+      c.inscripciones.forEach((ins) => {
+        const monto = Number(ins.montoCuota || 0);
+        if (ins.pagado || monto <= 0) return;
+        const alumno = alumnos.find((a) => a.id === ins.alumnoId);
+        if (!alumno) return;
+        if (!porAlumno.has(alumno.id)) porAlumno.set(alumno.id, { alumno, items: [], total: 0 });
+        const fila = porAlumno.get(alumno.id);
+        fila.items.push({ campeonatoId: c.id, nombre: c.nombre, tipo: c.tipo || "campeonato", monto });
+        fila.total += monto;
+      });
+    });
+    return Array.from(porAlumno.values());
+  }, [campeonatos, alumnos]);
+  const totalProgramas = programasPorAlumnoTodos.reduce((s, f) => s + f.total, 0);
 
-  async function copiar(a) {
+  const programasPorAlumno = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    return programasPorAlumnoTodos
+      .filter((f) => coincide(f.alumno, q) || f.items.some((i) => i.nombre.toLowerCase().includes(q)))
+      .sort((a, b) => b.total - a.total);
+  }, [programasPorAlumnoTodos, busqueda]);
+
+  async function copiarTexto(id, texto) {
     try {
-      await navigator.clipboard.writeText(mensajeRecordatorioPago(a));
-      setCopiadoId(a.id);
+      await navigator.clipboard.writeText(texto);
+      setCopiadoId(id);
       setTimeout(() => setCopiadoId(null), 2000);
     } catch {
       // Si el navegador bloquea el portapapeles no pasa nada — el botón de
       // WhatsApp de al lado no depende de esto y sigue funcionando.
     }
   }
+  const copiar = (a) => copiarTexto(a.id, mensajeRecordatorioPago(a));
 
   return (
     <div className="stack">
@@ -10531,8 +10654,23 @@ function CarteraView({ alumnosActivos }) {
             <AlertTriangle size={18} />
           </div>
           <div>
-            <div className="kpi-label">Alumnos con saldo pendiente</div>
-            <div className="kpi-value">{conDeuda.length}</div>
+            <div className="kpi-label">Mensualidades por cobrar</div>
+            <div className="kpi-value">{formatQ(totalMensualidades)}</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              {conDeudaTodos.length} alumno{conDeudaTodos.length === 1 ? "" : "s"}
+            </div>
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-icon" style={{ background: "#E7F7FD", color: "#0090C2" }}>
+            <Wallet size={18} />
+          </div>
+          <div>
+            <div className="kpi-label">Programas y eventos por cobrar</div>
+            <div className="kpi-value">{formatQ(totalProgramas)}</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              {programasPorAlumnoTodos.length} alumno{programasPorAlumnoTodos.length === 1 ? "" : "s"}
+            </div>
           </div>
         </div>
         <div className="kpi-card">
@@ -10541,17 +10679,37 @@ function CarteraView({ alumnosActivos }) {
           </div>
           <div>
             <div className="kpi-label">Total por cobrar</div>
-            <div className="kpi-value">{formatQ(totalDeuda)}</div>
+            <div className="kpi-value">{formatQ(totalMensualidades + totalProgramas)}</div>
           </div>
         </div>
       </div>
 
       <div className="panel">
         <div className="toolbar">
+          <div className="filtros" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className={vista === "mensualidades" ? "chip chip-active" : "chip"}
+              onClick={() => setVista("mensualidades")}
+            >
+              Mensualidades ({conDeudaTodos.length})
+            </button>
+            <button
+              type="button"
+              className={vista === "programas" ? "chip chip-active" : "chip"}
+              onClick={() => setVista("programas")}
+            >
+              Programas y eventos ({programasPorAlumnoTodos.length})
+            </button>
+          </div>
           <div className="search-box">
             <Search size={16} />
             <input
-              placeholder="Buscar por nombre, encargado o categoría…"
+              placeholder={
+                vista === "programas"
+                  ? "Buscar por alumno, encargado, categoría o programa…"
+                  : "Buscar por nombre, encargado o categoría…"
+              }
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
             />
@@ -10559,7 +10717,63 @@ function CarteraView({ alumnosActivos }) {
         </div>
       </div>
 
-      {conDeuda.length === 0 ? (
+      {vista === "programas" ? (
+        programasPorAlumno.length === 0 ? (
+          <div className="empty">
+            {programasPorAlumnoTodos.length === 0
+              ? "No hay cuotas de programas pendientes. Todo al día."
+              : "Ningún resultado para esa búsqueda."}
+          </div>
+        ) : (
+          <div className="stack" style={{ gap: 8 }}>
+            {programasPorAlumno.map((f) => {
+              const a = f.alumno;
+              const numeroWa = telefonoWhatsapp(a.telefono);
+              const texto = mensajeRecordatorioPrograma(a, f.items);
+              return (
+                <div key={a.id} className="panel cartera-fila">
+                  <div className="cartera-fila-info">
+                    <div className="cartera-fila-titulo">
+                      {a.nombre}
+                      {a.soloCampeonato && <span className="badge">Solo campeonato</span>}
+                    </div>
+                    <div className="muted" style={{ fontSize: 13 }}>
+                      {[a.categoria, a.encargado, a.telefono].filter(Boolean).join(" · ") || "Sin más datos"}
+                    </div>
+                    <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 2 }}>
+                      {f.items.map((i) => (
+                        <div key={i.campeonatoId} style={{ fontSize: 13 }}>
+                          <span className={"tipo-badge-programa tipo-badge-" + i.tipo}>{tipoProgramaLabel(i.tipo)}</span>{" "}
+                          {i.nombre} — {formatQ(i.monto)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="cartera-fila-monto num debt">{formatQ(f.total)}</div>
+                  <div className="cartera-fila-acciones">
+                    {onRegistrarPago && (
+                      <button className="btn-primary" onClick={() => onRegistrarPago(a.id)}>
+                        <Wallet size={15} /> Registrar pago
+                      </button>
+                    )}
+                    <button className="btn-secondary" onClick={() => copiarTexto("p-" + a.id, texto)}>
+                      <Copy size={15} /> {copiadoId === "p-" + a.id ? "¡Copiado!" : "Copiar"}
+                    </button>
+                    <a
+                      className="btn-primary"
+                      href={`https://wa.me/${numeroWa || ""}?text=${encodeURIComponent(texto)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <MessageCircle size={15} /> WhatsApp
+                    </a>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
+      ) : conDeuda.length === 0 ? (
         <div className="empty">No hay alumnos con saldo pendiente. Todo al día.</div>
       ) : (
         <div className="stack" style={{ gap: 8 }}>
@@ -10582,6 +10796,11 @@ function CarteraView({ alumnosActivos }) {
                 </div>
                 <div className="cartera-fila-monto num debt">{formatQ(a.saldoPendiente)}</div>
                 <div className="cartera-fila-acciones">
+                  {onRegistrarPago && (
+                    <button className="btn-primary" onClick={() => onRegistrarPago(a.id)}>
+                      <Wallet size={15} /> Registrar pago
+                    </button>
+                  )}
                   <button className="btn-secondary" onClick={() => copiar(a)}>
                     <Copy size={15} /> {copiadoId === a.id ? "¡Copiado!" : "Copiar"}
                   </button>
